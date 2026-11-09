@@ -5,7 +5,7 @@
 можно скрещивать: одинаковые монстры дают потомка старше, а разные виды по скрытым правилам дают гибриды.
 
 Играть: https://nanaironika.github.io/Game_1/
-Дизайн-документ: [docs/design.md](docs/design.md)
+Дизайн-документ: [docs/design.md](docs/design.md) · Роудмап: [docs/roadmap.md](docs/roadmap.md)
 
 Стек: TypeScript + Phaser 3 + Vite. Позже его упакуем в приложения для Android и iOS через Capacitor.
 

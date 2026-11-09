@@ -2,21 +2,25 @@ import Phaser from 'phaser';
 import * as D from './data';
 import { fullPath, type Pt } from './path';
 import { loadBestiary, loadRun, saveBestiary, saveRun, type RunSave } from './save';
+import * as R from './render';
 
 type Unit = {
   x: number;
   y: number;
-  kind: 'mon' | 'hybrid' | 'cocoon';
+  kind: 'mon' | 'hybrid' | 'sealed';
   sp?: D.Species;
   level?: number;
   hybrid?: string;
   cd: number;
   auraMul: number;
+  /** scene time (ms) when the reject-and-seal animation starts */
+  sealAt?: number;
 };
 
 type Enemy = {
-  px: number;
-  py: number;
+  /** position in cell units */
+  fx: number;
+  fy: number;
   seg: number;
   dist: number;
   hp: number;
@@ -32,10 +36,14 @@ type Enemy = {
 };
 
 type Shot = { x: number; y: number; target: Enemy; stats: D.Stats };
-type Phase = 'build' | 'choose' | 'wave' | 'over' | 'win';
+type Phase = 'build' | 'choose' | 'sealing' | 'wave' | 'over' | 'win';
 type ButtonSpec = { label: string; cb: () => void; color: number };
 
-const PANEL_Y = D.GRID_Y + D.ROWS * D.CELL;
+const PANEL_Y = D.GRID_Y + D.ROWS * D.CELL_H + 12;
+/** reject animation: blade, then plates */
+const KILL_MS = 380;
+const SEAL_MS = 420;
+const SEAL_STAGGER = 130;
 
 export class GameScene extends Phaser.Scene {
   private grid!: (Unit | null)[][];
@@ -58,6 +66,7 @@ export class GameScene extends Phaser.Scene {
   private curWave!: ReturnType<typeof D.waveInfo>;
   private bestiary!: Set<string>;
   private overlay: Phaser.GameObjects.GameObject[] = [];
+  private sealEnd = 0;
 
   private boardG!: Phaser.GameObjects.Graphics;
   private dynG!: Phaser.GameObjects.Graphics;
@@ -156,7 +165,7 @@ export class GameScene extends Phaser.Scene {
     this.gold = s.gold;
     this.chance = s.chance;
     s.cells.forEach((c, i) => {
-      const u: Unit = { ...c, cd: 0, auraMul: 1 };
+      const u: Unit = { ...c, kind: c.kind === 'cocoon' ? 'sealed' : c.kind, cd: 0, auraMul: 1 };
       this.grid[c.y][c.x] = u;
       if (s.fresh.includes(i)) this.fresh.push(u);
     });
@@ -170,8 +179,17 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ---------- helpers ----------
+  /** Screen position of the centre of a cell, or of a fractional cell position. */
   private center(p: Pt) {
-    return { x: D.GRID_X + p.x * D.CELL + D.CELL / 2, y: D.GRID_Y + p.y * D.CELL + D.CELL / 2 };
+    return this.toPx(p.x, p.y);
+  }
+
+  private toPx(fx: number, fy: number) {
+    return { x: D.GRID_X + fx * D.CELL_W + D.CELL_W / 2, y: D.GRID_Y + fy * D.CELL_H + D.CELL_H / 2 };
+  }
+
+  private origin(p: Pt) {
+    return { x: D.GRID_X + p.x * D.CELL_W, y: D.GRID_Y + p.y * D.CELL_H };
   }
 
   private isWaypoint(x: number, y: number) {
@@ -189,7 +207,7 @@ export class GameScene extends Phaser.Scene {
 
   private fighters() {
     const out: Unit[] = [];
-    for (const row of this.grid) for (const u of row) if (u && u.kind !== 'cocoon') out.push(u);
+    for (const row of this.grid) for (const u of row) if (u && u.kind !== 'sealed') out.push(u);
     return out;
   }
 
@@ -211,7 +229,7 @@ export class GameScene extends Phaser.Scene {
 
   private toast(text: string, color: string) {
     const t = this.add
-      .text(360, D.GRID_Y + (D.ROWS * D.CELL) / 2, text, {
+      .text(360, D.GRID_Y + (D.ROWS * D.CELL_H) / 2, text, {
         fontSize: '34px',
         fontStyle: 'bold',
         color,
@@ -227,9 +245,15 @@ export class GameScene extends Phaser.Scene {
 
   // ---------- input ----------
   private onTap(p: Phaser.Input.Pointer) {
-    if (this.overlay.length) return;
-    const cx = Math.floor((p.x - D.GRID_X) / D.CELL);
-    const cy = Math.floor((p.y - D.GRID_Y) / D.CELL);
+    if (this.overlay.length || this.phase === 'sealing') return;
+    const cx = Math.floor((p.x - D.GRID_X) / D.CELL_W);
+    let cy = Math.floor((p.y - D.GRID_Y) / D.CELL_H);
+    // Cages rise above their cell. Outside the build phase, a tap on an empty cell
+    // that is visually covered by the cage below selects that cage.
+    if (this.phase !== 'build' && cx >= 0 && cx < D.COLS && cy >= 0 && cy < D.ROWS - 1 && !this.grid[cy][cx]) {
+      const coveredFrom = D.GRID_Y + (cy + 1) * D.CELL_H - D.OBJ_H;
+      if (p.y >= coveredFrom && this.grid[cy + 1][cx]) cy++;
+    }
     if (cx < 0 || cy < 0 || cx >= D.COLS || cy >= D.ROWS) return;
     const u = this.grid[cy][cx];
 
@@ -245,7 +269,7 @@ export class GameScene extends Phaser.Scene {
       this.refresh();
       return;
     }
-    this.selected = u && u.kind !== 'cocoon' ? u : null;
+    this.selected = u && u.kind !== 'sealed' ? u : null;
     this.refresh();
   }
 
@@ -325,17 +349,31 @@ export class GameScene extends Phaser.Scene {
   }
 
   private keep(sel: Unit) {
+    const now = this.time.now;
+    let i = 0;
     for (const u of this.fresh) {
       if (u === sel) continue;
-      u.kind = 'cocoon';
-      u.sp = undefined;
-      u.level = undefined;
+      u.kind = 'sealed';
+      u.sealAt = now + i++ * SEAL_STAGGER;
     }
+    this.sealEnd = now + (i - 1) * SEAL_STAGGER + KILL_MS + SEAL_MS + 150;
     this.fresh = [];
     this.selected = null;
     this.crossing = false;
     this.partners = [];
     this.recalcAuras();
+    this.phase = 'sealing';
+    this.refresh();
+  }
+
+  private finishSealing() {
+    for (const row of this.grid)
+      for (const u of row)
+        if (u && u.kind === 'sealed') {
+          u.sealAt = undefined;
+          u.sp = undefined;
+          u.level = undefined;
+        }
     this.startWave();
   }
 
@@ -370,6 +408,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_t: number, deltaMs: number) {
+    if (this.phase === 'sealing' && this.time.now >= this.sealEnd) this.finishSealing();
     if (this.phase === 'wave' && !this.overlay.length) {
       let left = (Math.min(deltaMs, 100) / 1000) * this.speed;
       while (left > 0 && this.phase === 'wave') {
@@ -388,10 +427,9 @@ export class GameScene extends Phaser.Scene {
 
     this.spawnTimer -= dt;
     if (this.toSpawn > 0 && this.spawnTimer <= 0) {
-      const c = this.center(this.path[0]);
       this.enemies.push({
-        px: c.x,
-        py: c.y,
+        fx: this.path[0].x,
+        fy: this.path[0].y,
         seg: 0,
         dist: 0,
         hp: w.hp,
@@ -412,19 +450,19 @@ export class GameScene extends Phaser.Scene {
     for (const e of this.enemies) {
       if (e.dead) continue;
       const slowed = this.clock < e.slowUntil ? 1 - e.slowPct : 1;
-      let remaining = e.speed * slowed * D.CELL * dt;
+      let remaining = e.speed * slowed * dt;
       while (remaining > 0 && e.seg < this.path.length - 1) {
-        const t = this.center(this.path[e.seg + 1]);
-        const d = Math.hypot(t.x - e.px, t.y - e.py);
+        const t = this.path[e.seg + 1];
+        const d = Math.hypot(t.x - e.fx, t.y - e.fy);
         if (d <= remaining) {
-          e.px = t.x;
-          e.py = t.y;
+          e.fx = t.x;
+          e.fy = t.y;
           e.seg++;
           e.dist += d;
           remaining -= d;
         } else {
-          e.px += ((t.x - e.px) / d) * remaining;
-          e.py += ((t.y - e.py) / d) * remaining;
+          e.fx += ((t.x - e.fx) / d) * remaining;
+          e.fy += ((t.y - e.fy) / d) * remaining;
           e.dist += remaining;
           remaining = 0;
         }
@@ -442,22 +480,22 @@ export class GameScene extends Phaser.Scene {
       if (u.cd > 0) continue;
       u.cd = 0;
       const s = this.stats(u);
-      const c = this.center(u);
-      const r = s.range * D.CELL;
       const targets = this.enemies
-        .filter((e) => !e.dead && Math.hypot(e.px - c.x, e.py - c.y) <= r)
+        .filter((e) => !e.dead && Math.hypot(e.fx - u.x, e.fy - u.y) <= s.range)
         .sort((a, b) => b.dist - a.dist)
         .slice(0, s.targets ?? 1);
       if (!targets.length) continue;
-      for (const e of targets) this.shots.push({ x: c.x, y: c.y, target: e, stats: s });
+      const c = this.center(u);
+      for (const e of targets) this.shots.push({ x: c.x, y: c.y - D.OBJ_H, target: e, stats: s });
       u.cd = 1 / (s.rate * u.auraMul);
     }
 
     const shotSpeed = 750 * dt;
     this.shots = this.shots.filter((sh) => {
       if (sh.target.dead) return false;
-      const dx = sh.target.px - sh.x;
-      const dy = sh.target.py - sh.y;
+      const tp = this.toPx(sh.target.fx, sh.target.fy);
+      const dx = tp.x - sh.x;
+      const dy = tp.y - 12 - sh.y;
       const d = Math.hypot(dx, dy);
       if (d <= shotSpeed + 6) {
         this.hit(sh);
@@ -494,9 +532,8 @@ export class GameScene extends Phaser.Scene {
       e.poisonUntil = this.clock + 3;
     }
     if (s.splash) {
-      const r = s.splash * D.CELL;
       for (const o of this.enemies) {
-        if (o !== e && !o.dead && Math.hypot(o.px - e.px, o.py - e.py) <= r) this.damage(o, dmg * 0.5);
+        if (o !== e && !o.dead && Math.hypot(o.fx - e.fx, o.fy - e.fy) <= s.splash) this.damage(o, dmg * 0.5);
       }
     }
     this.damage(e, dmg);
@@ -614,7 +651,7 @@ export class GameScene extends Phaser.Scene {
           });
           break;
         }
-        this.msg.setText('Оставьте одного. Остальные уйдут в коконы');
+        this.msg.setText('Оставьте одного. Остальных запечатают');
         if (!isFresh) {
           info =
             'Нажмите на одного из новых монстров (подсвечены жёлтым).\nОдинаковые монстры дают более сильного потомка. Разные виды могут дать гибрид, но правила придётся найти самому.';
@@ -632,6 +669,10 @@ export class GameScene extends Phaser.Scene {
         });
         break;
       }
+      case 'sealing':
+        this.msg.setText('Клетки запечатываются…');
+        info = '';
+        break;
       case 'wave': {
         const w = D.waveInfo(this.wave);
         this.msg.setText(`Волна ${this.wave}${w.boss ? ': БОСС!' : w.fast ? ': быстрые враги' : ''}`);
@@ -699,17 +740,20 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ---------- drawing ----------
+  /** Ground layer: tiles, path, waypoints, cell highlights. Redrawn on state changes. */
   private drawBoard() {
     const g = this.boardG;
     g.clear();
-    g.fillStyle(0x1b2a1d).fillRect(D.GRID_X - 4, D.GRID_Y - 4, D.COLS * D.CELL + 8, D.ROWS * D.CELL + 8);
+    const W = D.COLS * D.CELL_W;
+    const H = D.ROWS * D.CELL_H;
+    g.fillStyle(0x16221a).fillRect(D.GRID_X - 6, D.GRID_Y - 6, W + 12, H + 12);
     for (let y = 0; y < D.ROWS; y++)
       for (let x = 0; x < D.COLS; x++) {
-        g.fillStyle((x + y) % 2 ? 0x24362a : 0x203126);
-        g.fillRect(D.GRID_X + x * D.CELL, D.GRID_Y + y * D.CELL, D.CELL, D.CELL);
+        g.fillStyle((x + y) % 2 ? 0x2a3d2c : 0x26382a);
+        g.fillRect(D.GRID_X + x * D.CELL_W, D.GRID_Y + y * D.CELL_H, D.CELL_W, D.CELL_H);
       }
 
-    g.lineStyle(8, 0x8a6d3b, 0.45);
+    g.lineStyle(14, 0x7a5f36, 0.5);
     g.beginPath();
     this.path.forEach((p, i) => {
       const c = this.center(p);
@@ -720,86 +764,112 @@ export class GameScene extends Phaser.Scene {
 
     for (const w of D.WAYPOINTS) {
       const c = this.center(w);
-      g.fillStyle(0xd9b13b).fillCircle(c.x, c.y, D.CELL * 0.42);
+      g.fillStyle(0x000000, 0.3).fillEllipse(c.x, c.y + 3, D.CELL_W * 0.86, D.CELL_H * 0.8);
+      g.fillStyle(0xd9b13b).fillEllipse(c.x, c.y, D.CELL_W * 0.82, D.CELL_H * 0.74);
     }
 
-    for (const row of this.grid)
-      for (const u of row) {
-        if (!u) continue;
-        const c = this.center(u);
-        if (u.kind === 'cocoon') this.drawCocoon(g, c.x, c.y);
-        else if (u.kind === 'hybrid') this.drawHybrid(g, c.x, c.y, this.stats(u).color);
-        else this.drawCreature(g, c.x, c.y, u.level!, D.BASE[u.sp!].color);
+    for (const u of this.fresh) {
+      const o = this.origin(u);
+      const col = this.partners.includes(u) ? 0xff5ad8 : 0xffe066;
+      g.fillStyle(col, 0.28).fillRect(o.x + 1, o.y + 1, D.CELL_W - 2, D.CELL_H - 2);
+      g.lineStyle(3, col).strokeRect(o.x + 1, o.y + 1, D.CELL_W - 2, D.CELL_H - 2);
+    }
+    if (this.selected) {
+      const o = this.origin(this.selected);
+      g.lineStyle(3, 0xffffff).strokeRect(o.x, o.y, D.CELL_W, D.CELL_H);
+    }
+  }
 
-        if (this.fresh.includes(u)) {
-          const col = this.partners.includes(u) ? 0xff5ad8 : 0xffe066;
-          g.lineStyle(3, col).strokeRect(c.x - D.CELL / 2 + 2, c.y - D.CELL / 2 + 2, D.CELL - 4, D.CELL - 4);
-        }
+  private drawUnit(g: Phaser.GameObjects.Graphics, u: Unit, now: number) {
+    const o = this.origin(u);
+    const foot = o.y + D.CELL_H / 2 + 5;
+    const cx = o.x + D.CELL_W / 2;
+
+    if (u.kind === 'sealed') {
+      const t = u.sealAt === undefined ? Infinity : now - u.sealAt;
+      if (t >= KILL_MS + SEAL_MS) return R.sealedBlock(g, o.x, o.y, 1);
+      // still animating: cage with the doomed monster, blade, then plates
+      R.cageFloor(g, o.x, o.y, u.sp && t < KILL_MS ? D.BASE[u.sp].color : undefined);
+      R.cageBack(g, o.x, o.y, 0x8a8f96);
+      if (t < KILL_MS && u.sp) {
+        const k = Math.max(0, t) / KILL_MS;
+        const r = this.monsterRadius(u.level ?? 0) * (1 - 0.7 * k);
+        R.creature(g, cx, foot, r, D.BASE[u.sp].color, { hurt: k });
       }
-  }
-
-  private drawEyes(g: Phaser.GameObjects.Graphics, x: number, y: number, r: number) {
-    const ex = r * 0.38;
-    const er = Math.max(3, r * 0.26);
-    g.fillStyle(0xffffff)
-      .fillCircle(x - ex, y - r * 0.15, er)
-      .fillCircle(x + ex, y - r * 0.15, er);
-    g.fillStyle(0x111111)
-      .fillCircle(x - ex, y - r * 0.1, er * 0.5)
-      .fillCircle(x + ex, y - r * 0.1, er * 0.5);
-  }
-
-  private drawCreature(g: Phaser.GameObjects.Graphics, x: number, y: number, level: number, color: number) {
-    const r = D.CELL * (0.24 + 0.035 * level);
-    g.fillStyle(0x000000, 0.25).fillEllipse(x, y + r * 0.9, r * 1.8, r * 0.5);
-    g.fillStyle(color).fillCircle(x, y, r);
-    g.lineStyle(2, 0x000000, 0.35).strokeCircle(x, y, r);
-    this.drawEyes(g, x, y, r);
-    for (let i = 0; i <= level; i++) {
-      g.fillStyle(0xffffff).fillCircle(x - (level * 5) / 2 + i * 5, y + D.CELL / 2 - 4, 2);
+      R.cageFront(g, o.x, o.y, 0x8a8f96);
+      if (t < KILL_MS) R.blade(g, o.x, o.y, Math.max(0, t) / KILL_MS);
+      else R.sealedBlock(g, o.x, o.y, (t - KILL_MS) / SEAL_MS);
+      return;
     }
+
+    const hybrid = u.kind === 'hybrid';
+    const frame = hybrid ? 0xd9b13b : 0x9aa0a8;
+    R.cageFloor(g, o.x, o.y, hybrid ? this.stats(u).color : D.BASE[u.sp!].color);
+    R.cageBack(g, o.x, o.y, frame);
+    if (hybrid) R.creature(g, cx, foot, 12, this.stats(u).color, { spikes: true });
+    else R.creature(g, cx, foot, this.monsterRadius(u.level!), D.BASE[u.sp!].color);
+    R.cageFront(g, o.x, o.y, frame, hybrid ? -1 : u.level!);
   }
 
-  private drawHybrid(g: Phaser.GameObjects.Graphics, x: number, y: number, color: number) {
-    const pts: { x: number; y: number }[] = [];
-    for (let i = 0; i < 16; i++) {
-      const a = -Math.PI / 2 + (i * Math.PI) / 8;
-      const rad = i % 2 ? 15 : 22;
-      pts.push({ x: x + Math.cos(a) * rad, y: y + Math.sin(a) * rad });
-    }
-    g.fillStyle(0xffd84a).fillPoints(pts, true);
-    g.fillStyle(color).fillCircle(x, y, 15);
-    g.lineStyle(2, 0x000000, 0.4).strokeCircle(x, y, 15);
-    this.drawEyes(g, x, y, 15);
+  private monsterRadius(level: number) {
+    return D.CELL_W * (0.22 + 0.03 * level);
   }
 
-  private drawCocoon(g: Phaser.GameObjects.Graphics, x: number, y: number) {
-    g.fillStyle(0x6e6458).fillEllipse(x, y, 30, 40);
-    g.lineStyle(2, 0x4a4238);
-    g.strokeEllipse(x, y, 30, 40);
-    g.lineBetween(x - 13, y - 8, x + 13, y - 4);
-    g.lineBetween(x - 14, y + 4, x + 14, y + 8);
-  }
-
+  /** Object layer: cages and enemies sorted by depth, then shots and HP bars on top. */
   private drawDynamic() {
     const g = this.dynG;
     g.clear();
+    const now = this.time.now;
+
+    const items: { y: number; draw: () => void }[] = [];
+    for (const row of this.grid)
+      for (const u of row) {
+        if (!u) continue;
+        items.push({ y: this.origin(u).y + D.CELL_H, draw: () => this.drawUnit(g, u, now) });
+      }
+    for (const e of this.enemies) {
+      const p = this.toPx(e.fx, e.fy);
+      const foot = p.y + 6;
+      items.push({
+        y: foot,
+        draw: () => {
+          const r = this.enemyRadius(e);
+          R.enemyBody(g, p.x, foot, r, e.boss ? 0x8e2bd0 : e.fast ? 0xe08a30 : 0xb83030);
+          const cy = foot - r - 3;
+          if (this.clock < e.slowUntil) g.lineStyle(3, 0x6fa8ff).strokeCircle(p.x, cy, r + 2);
+          if (this.clock < e.poisonUntil) g.lineStyle(2, 0x40e070).strokeCircle(p.x, cy, r + 5);
+        },
+      });
+    }
+    items.sort((a, b) => a.y - b.y);
+    for (const it of items) it.draw();
+
+    for (const s of this.shots) {
+      g.fillStyle(0x000000, 0.4).fillCircle(s.x + 1, s.y + 2, 5);
+      g.fillStyle(s.stats.color).fillCircle(s.x, s.y, 5);
+    }
+
+    // HP bars always on top so enemies stay readable behind cages
+    for (const e of this.enemies) {
+      const p = this.toPx(e.fx, e.fy);
+      const r = this.enemyRadius(e);
+      const w = r * 2 + 8;
+      const y = p.y + 6 - 2 * r - 14;
+      g.fillStyle(0x000000).fillRect(p.x - w / 2 - 1, y - 1, w + 2, 7);
+      g.fillStyle(0x7cff6a).fillRect(p.x - w / 2, y, (w * Math.max(0, e.hp)) / e.maxHp, 5);
+    }
+
     if (this.selected) {
       const c = this.center(this.selected);
       const s = this.stats(this.selected);
-      g.lineStyle(2, 0xffffff, 0.7).strokeCircle(c.x, c.y, s.range * D.CELL);
-      g.fillStyle(0xffffff, 0.06).fillCircle(c.x, c.y, s.range * D.CELL);
-      g.lineStyle(3, 0xffffff).strokeRect(c.x - D.CELL / 2, c.y - D.CELL / 2, D.CELL, D.CELL);
+      const rx = s.range * D.CELL_W;
+      const ry = s.range * D.CELL_H;
+      g.fillStyle(0xffffff, 0.07).fillEllipse(c.x, c.y, rx * 2, ry * 2);
+      g.lineStyle(2, 0xffffff, 0.75).strokeEllipse(c.x, c.y, rx * 2, ry * 2);
     }
-    for (const e of this.enemies) {
-      const r = e.boss ? 17 : e.fast ? 9 : 11;
-      g.fillStyle(e.boss ? 0x8e2bd0 : e.fast ? 0xe08a30 : 0xb83030).fillCircle(e.px, e.py, r);
-      if (this.clock < e.slowUntil) g.lineStyle(3, 0x6fa8ff).strokeCircle(e.px, e.py, r + 2);
-      if (this.clock < e.poisonUntil) g.lineStyle(2, 0x40e070).strokeCircle(e.px, e.py, r + 5);
-      const w = r * 2 + 6;
-      g.fillStyle(0x000000).fillRect(e.px - w / 2, e.py - r - 9, w, 5);
-      g.fillStyle(0x7cff6a).fillRect(e.px - w / 2, e.py - r - 9, (w * Math.max(0, e.hp)) / e.maxHp, 5);
-    }
-    for (const s of this.shots) g.fillStyle(s.stats.color).fillCircle(s.x, s.y, 5);
+  }
+
+  private enemyRadius(e: Enemy) {
+    return e.boss ? 15 : e.fast ? 8 : 10;
   }
 }

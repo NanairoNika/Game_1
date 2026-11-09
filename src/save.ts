@@ -6,7 +6,7 @@ const BESTIARY_KEY = 'gd.bestiary.v1';
 export interface SavedCell {
   x: number;
   y: number;
-  kind: 'mon' | 'hybrid' | 'cocoon';
+  kind: 'mon' | 'hybrid' | 'sealed' | 'cocoon';
   sp?: Species;
   level?: number;
   hybrid?: string;

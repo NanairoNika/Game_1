@@ -3,9 +3,13 @@ import type { Pt } from './path';
 // ---- Board ----
 export const COLS = 15;
 export const ROWS = 20;
-export const CELL = 46;
-export const GRID_X = (720 - COLS * CELL) / 2;
-export const GRID_Y = 100;
+/** Cell footprint on screen: slightly squashed vertically for a 3/4 top-down view. */
+export const CELL_W = 46;
+export const CELL_H = 38;
+/** Visual height of cages and sealed blocks above the ground. */
+export const OBJ_H = 20;
+export const GRID_X = (720 - COLS * CELL_W) / 2;
+export const GRID_Y = 130;
 
 /** Spawn -> checkpoints -> exit. Nothing can be placed on these cells. */
 export const WAYPOINTS: Pt[] = [

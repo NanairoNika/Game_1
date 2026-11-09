@@ -7,7 +7,7 @@ export const CELL = 46;
 export const GRID_X = (720 - COLS * CELL) / 2;
 export const GRID_Y = 100;
 
-/** Spawn -> checkpoints -> exit. Nothing can be built on these cells. */
+/** Spawn -> checkpoints -> exit. Nothing can be placed on these cells. */
 export const WAYPOINTS: Pt[] = [
   { x: 7, y: 0 },
   { x: 1, y: 5 },
@@ -16,24 +16,24 @@ export const WAYPOINTS: Pt[] = [
   { x: 7, y: 19 },
 ];
 
-export const GEMS_PER_ROUND = 5;
+export const PER_ROUND = 5;
 export const TOTAL_WAVES = 20;
 export const START_LIVES = 20;
 
-// ---- Gems ----
-export const GEM_TYPES = [
-  'ruby',
-  'sapphire',
-  'emerald',
-  'topaz',
-  'amethyst',
-  'diamond',
-  'aquamarine',
-  'opal',
+// ---- Species ----
+export const SPECIES = [
+  'flamer',
+  'jelly',
+  'rotter',
+  'swarmer',
+  'spitter',
+  'fanger',
+  'darter',
+  'howler',
 ] as const;
-export type GemType = (typeof GEM_TYPES)[number];
+export type Species = (typeof SPECIES)[number];
 
-export const LEVEL_NAMES = ['Осколок', 'Тусклый', 'Обычный', 'Чистый', 'Идеальный'];
+export const LEVEL_NAMES = ['Детёныш', 'Молодой', 'Взрослый', 'Матёрый', 'Альфа'];
 export const MAX_LEVEL = LEVEL_NAMES.length - 1;
 const LEVEL_MULT = [1, 2.5, 6, 14, 32];
 
@@ -56,23 +56,23 @@ export interface Stats {
   targets?: number;
   /** chance of double damage */
   crit?: number;
-  /** attack speed bonus to towers within 2.5 cells */
+  /** attack speed bonus to allies within 2.5 cells */
   aura?: number;
 }
 
-const BASE: Record<GemType, Stats> = {
-  ruby: { name: 'Рубин', desc: 'Урон по области', color: 0xe0303a, dmg: 12, rate: 0.8, range: 3, splash: 1.2 },
-  sapphire: { name: 'Сапфир', desc: 'Замедляет врагов', color: 0x2f6fe0, dmg: 8, rate: 1, range: 3.5, slow: 0.3 },
-  emerald: { name: 'Изумруд', desc: 'Отравляет', color: 0x22b35a, dmg: 6, rate: 1, range: 3, poison: 5 },
-  topaz: { name: 'Топаз', desc: 'Бьёт несколько целей', color: 0xf0b020, dmg: 7, rate: 1, range: 3, targets: 2 },
-  amethyst: { name: 'Аметист', desc: 'Большая дальность', color: 0x9a4fd8, dmg: 16, rate: 0.6, range: 5 },
-  diamond: { name: 'Алмаз', desc: 'Критические удары', color: 0xe8f4ff, dmg: 18, rate: 0.8, range: 3, crit: 0.25 },
-  aquamarine: { name: 'Аквамарин', desc: 'Очень быстрые атаки', color: 0x40d8d0, dmg: 5, rate: 3, range: 2.5 },
-  opal: { name: 'Опал', desc: 'Ускоряет соседние башни', color: 0xf0a0d0, dmg: 6, rate: 1, range: 3, aura: 0.1 },
+export const BASE: Record<Species, Stats> = {
+  flamer: { name: 'Жаровик', desc: 'Плюётся огнём по области', color: 0xe0403a, dmg: 12, rate: 0.8, range: 3, splash: 1.2 },
+  jelly: { name: 'Студень', desc: 'Липкая слизь замедляет', color: 0x3f7fe8, dmg: 8, rate: 1, range: 3.5, slow: 0.3 },
+  rotter: { name: 'Гнильник', desc: 'Отравляет', color: 0x4cb84a, dmg: 6, rate: 1, range: 3, poison: 5 },
+  swarmer: { name: 'Роевик', desc: 'Атакует несколько целей', color: 0xf0b020, dmg: 7, rate: 1, range: 3, targets: 2 },
+  spitter: { name: 'Плевун', desc: 'Бьёт очень далеко', color: 0x9a5fd8, dmg: 16, rate: 0.6, range: 5 },
+  fanger: { name: 'Клыкач', desc: 'Критические укусы', color: 0xd8d0c0, dmg: 18, rate: 0.8, range: 3, crit: 0.25 },
+  darter: { name: 'Шустрик', desc: 'Очень быстрые атаки', color: 0x40d8d0, dmg: 5, rate: 3, range: 2.5 },
+  howler: { name: 'Ревун', desc: 'Вой ускоряет соседей', color: 0xf090c8, dmg: 6, rate: 1, range: 3, aura: 0.1 },
 };
 
-export function gemStats(type: GemType, level: number): Stats {
-  const b = BASE[type];
+export function speciesStats(sp: Species, level: number): Stats {
+  const b = BASE[sp];
   const m = LEVEL_MULT[level];
   return {
     ...b,
@@ -86,24 +86,25 @@ export function gemStats(type: GemType, level: number): Stats {
   };
 }
 
-// ---- Recipes: built from gems placed in the same round ----
-export interface Special {
+// ---- Hybrids: secret crossbreeding rules the player discovers ----
+export interface Hybrid {
   id: string;
-  needs: { type: GemType; level: number }[];
+  /** exact set of parents (order does not matter) */
+  parents: { sp: Species; level: number }[];
   stats: Stats;
 }
 
-export const SPECIALS: Special[] = [
+export const HYBRIDS: Hybrid[] = [
   {
-    id: 'moonstone',
-    needs: [
-      { type: 'sapphire', level: 0 },
-      { type: 'diamond', level: 0 },
-      { type: 'topaz', level: 0 },
+    id: 'icehive',
+    parents: [
+      { sp: 'jelly', level: 0 },
+      { sp: 'fanger', level: 0 },
+      { sp: 'swarmer', level: 0 },
     ],
     stats: {
-      name: 'Лунный камень',
-      desc: 'Замедляет до трёх целей, урон по области',
+      name: 'Ледяной рой',
+      desc: 'Замораживает до трёх целей, урон по области',
       color: 0xbfd4ff,
       dmg: 30,
       rate: 1.2,
@@ -114,15 +115,15 @@ export const SPECIALS: Special[] = [
     },
   },
   {
-    id: 'bloodamber',
-    needs: [
-      { type: 'ruby', level: 1 },
-      { type: 'ruby', level: 0 },
-      { type: 'amethyst', level: 0 },
+    id: 'magmaserpent',
+    parents: [
+      { sp: 'flamer', level: 1 },
+      { sp: 'flamer', level: 0 },
+      { sp: 'spitter', level: 0 },
     ],
     stats: {
-      name: 'Кровавый янтарь',
-      desc: 'Мощный удар по большой области',
+      name: 'Магмовый змей',
+      desc: 'Мощные залпы по большой области',
       color: 0xff6a1a,
       dmg: 90,
       rate: 0.7,
@@ -132,14 +133,14 @@ export const SPECIALS: Special[] = [
     },
   },
   {
-    id: 'malachite',
-    needs: [
-      { type: 'emerald', level: 0 },
-      { type: 'opal', level: 0 },
-      { type: 'aquamarine', level: 0 },
+    id: 'plaguehornet',
+    parents: [
+      { sp: 'rotter', level: 0 },
+      { sp: 'howler', level: 0 },
+      { sp: 'darter', level: 0 },
     ],
     stats: {
-      name: 'Малахит',
+      name: 'Чумной шершень',
       desc: 'Быстро травит до четырёх целей',
       color: 0x0fa878,
       dmg: 18,
@@ -149,10 +150,26 @@ export const SPECIALS: Special[] = [
       poison: 12,
     },
   },
+  {
+    id: 'stormlizard',
+    parents: [
+      { sp: 'darter', level: 1 },
+      { sp: 'fanger', level: 1 },
+    ],
+    stats: {
+      name: 'Грозовой ящер',
+      desc: 'Молниеносные критические удары',
+      color: 0x7ad0ff,
+      dmg: 45,
+      rate: 1.8,
+      range: 3.5,
+      crit: 0.35,
+    },
+  },
 ];
 
-export function specialRecipeText(s: Special): string {
-  return s.needs.map((n) => `${BASE[n.type].name} (${LEVEL_NAMES[n.level]})`).join(' + ');
+export function parentsText(h: Hybrid): string {
+  return h.parents.map((p) => `${BASE[p.sp].name} (${LEVEL_NAMES[p.level]})`).join(' + ');
 }
 
 // ---- Quality odds (bought with gold) ----

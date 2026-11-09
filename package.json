@@ -1,0 +1,27 @@
+{
+  "name": "gem-defense",
+  "version": "0.1.0",
+  "description": "Tower defense: случайные самоцветы, лабиринт, слияние и рецепты",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NanairoNika/Game_1.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NanairoNika/Game_1/issues"
+  },
+  "homepage": "https://github.com/NanairoNika/Game_1#readme",
+  "dependencies": {
+    "phaser": "^3.80.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  },
+  "private": true,
+  "type": "module"
+}

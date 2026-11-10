@@ -30,8 +30,8 @@ type Enemy = {
   slowUntil: number;
   poisonDps: number;
   poisonUntil: number;
-  boss: boolean;
-  fast: boolean;
+  def: D.EnemyDef;
+  gold: number;
   dead: boolean;
 };
 
@@ -61,9 +61,9 @@ export class GameScene extends Phaser.Scene {
   private partners!: Unit[];
   private enemies!: Enemy[];
   private shots!: Shot[];
-  private toSpawn!: number;
-  private spawnTimer!: number;
-  private curWave!: ReturnType<typeof D.waveInfo>;
+  /** enemies still to spawn this wave, sorted by spawn time */
+  private spawnQueue!: { t: number; g: D.SpawnGroup }[];
+  private waveTime!: number;
   private bestiary!: Set<string>;
   private overlay: Phaser.GameObjects.GameObject[] = [];
   private sealEnd = 0;
@@ -82,6 +82,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   create() {
+    if (D.DATA_ERRORS.length) return this.showDataErrors();
     this.grid = Array.from({ length: D.ROWS }, () => Array<Unit | null>(D.COLS).fill(null));
     this.phase = 'build';
     this.wave = 1;
@@ -96,8 +97,8 @@ export class GameScene extends Phaser.Scene {
     this.partners = [];
     this.enemies = [];
     this.shots = [];
-    this.toSpawn = 0;
-    this.spawnTimer = 0;
+    this.spawnQueue = [];
+    this.waveTime = 0;
     this.buttons = [];
     this.overlay = [];
     this.bestiary = loadBestiary();
@@ -143,6 +144,17 @@ export class GameScene extends Phaser.Scene {
     if (resumed) this.toast(`Игра продолжена: волна ${this.wave}`, '#ffe9a8');
   }
 
+  private showDataErrors() {
+    const list = D.DATA_ERRORS.slice(0, 25).map((e) => `• ${e}`);
+    if (D.DATA_ERRORS.length > 25) list.push(`…и ещё ${D.DATA_ERRORS.length - 25}`);
+    this.add.text(30, 40, `Ошибки в таблицах (папка data):\n\n${list.join('\n')}`, {
+      fontSize: '24px',
+      color: '#ffb0a0',
+      wordWrap: { width: 660 },
+      lineSpacing: 6,
+    });
+  }
+
   // ---------- save / load ----------
   private persist() {
     if (this.phase !== 'build' && this.phase !== 'choose') return;
@@ -160,6 +172,20 @@ export class GameScene extends Phaser.Scene {
   private restore() {
     const s = loadRun();
     if (!s) return false;
+    // Tables may have changed since the save: drop it if it no longer fits.
+    const fits =
+      s.wave <= D.TOTAL_WAVES &&
+      s.cells.every(
+        (c) =>
+          (c.kind === 'mon' && c.sp && D.BASE[c.sp] && (c.level ?? 99) <= D.MAX_LEVEL) ||
+          (c.kind === 'hybrid' && D.HYBRIDS.some((h) => h.id === c.hybrid)) ||
+          c.kind === 'sealed' ||
+          c.kind === 'cocoon',
+      );
+    if (!fits) {
+      saveRun(null);
+      return false;
+    }
     this.wave = s.wave;
     this.lives = s.lives;
     this.gold = s.gold;
@@ -392,14 +418,16 @@ export class GameScene extends Phaser.Scene {
   // ---------- waves ----------
   private startWave() {
     this.phase = 'wave';
-    this.curWave = D.waveInfo(this.wave);
-    this.toSpawn = this.curWave.count;
-    this.spawnTimer = 0;
+    this.spawnQueue = [];
+    for (const g of D.WAVES[this.wave - 1])
+      for (let i = 0; i < g.count; i++) this.spawnQueue.push({ t: g.delay + i * g.interval, g });
+    this.spawnQueue.sort((a, b) => a.t - b.t);
+    this.waveTime = 0;
     this.refresh();
   }
 
   private endWave() {
-    this.gold += 5 + this.wave;
+    this.gold += D.WAVE_BONUS_BASE + this.wave;
     this.wave++;
     this.shots = [];
     this.phase = this.wave > D.TOTAL_WAVES ? 'win' : 'build';
@@ -408,6 +436,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_t: number, deltaMs: number) {
+    if (D.DATA_ERRORS.length) return;
     if (this.phase === 'sealing' && this.time.now >= this.sealEnd) this.finishSealing();
     if (this.phase === 'wave' && !this.overlay.length) {
       let left = (Math.min(deltaMs, 100) / 1000) * this.speed;
@@ -423,28 +452,25 @@ export class GameScene extends Phaser.Scene {
 
   private step(dt: number) {
     this.clock += dt;
-    const w = this.curWave;
-
-    this.spawnTimer -= dt;
-    if (this.toSpawn > 0 && this.spawnTimer <= 0) {
+    this.waveTime += dt;
+    while (this.spawnQueue.length && this.spawnQueue[0].t <= this.waveTime) {
+      const { g } = this.spawnQueue.shift()!;
       this.enemies.push({
         fx: this.path[0].x,
         fy: this.path[0].y,
         seg: 0,
         dist: 0,
-        hp: w.hp,
-        maxHp: w.hp,
-        speed: w.speed,
+        hp: g.hp,
+        maxHp: g.hp,
+        speed: g.enemy.speed,
         slowPct: 0,
         slowUntil: 0,
         poisonDps: 0,
         poisonUntil: 0,
-        boss: w.boss,
-        fast: w.fast,
+        def: g.enemy,
+        gold: g.gold,
         dead: false,
       });
-      this.toSpawn--;
-      this.spawnTimer = w.fast ? 0.5 : 0.9;
     }
 
     for (const e of this.enemies) {
@@ -469,7 +495,7 @@ export class GameScene extends Phaser.Scene {
       }
       if (e.seg >= this.path.length - 1) {
         e.dead = true;
-        this.lives -= e.boss ? 3 : 1;
+        this.lives -= e.def.livesCost;
         continue;
       }
       if (this.clock < e.poisonUntil) this.damage(e, e.poisonDps * dt);
@@ -515,7 +541,7 @@ export class GameScene extends Phaser.Scene {
       this.refresh();
       return;
     }
-    if (this.toSpawn === 0 && this.enemies.length === 0) this.endWave();
+    if (this.spawnQueue.length === 0 && this.enemies.length === 0) this.endWave();
   }
 
   private hit(sh: Shot) {
@@ -523,28 +549,29 @@ export class GameScene extends Phaser.Scene {
     const e = sh.target;
     let dmg = s.dmg;
     if (s.crit && Math.random() < s.crit) dmg *= 2;
-    if (s.slow) {
+    if (s.slow && !e.def.immuneSlow) {
       e.slowPct = Math.max(this.clock < e.slowUntil ? e.slowPct : 0, s.slow);
       e.slowUntil = this.clock + 2;
     }
-    if (s.poison) {
+    if (s.poison && !e.def.immunePoison) {
       e.poisonDps = Math.max(this.clock < e.poisonUntil ? e.poisonDps : 0, s.poison);
       e.poisonUntil = this.clock + 3;
     }
     if (s.splash) {
       for (const o of this.enemies) {
-        if (o !== e && !o.dead && Math.hypot(o.fx - e.fx, o.fy - e.fy) <= s.splash) this.damage(o, dmg * 0.5);
+        if (o !== e && !o.dead && Math.hypot(o.fx - e.fx, o.fy - e.fy) <= s.splash) this.damage(o, dmg * 0.5, true);
       }
     }
-    this.damage(e, dmg);
+    this.damage(e, dmg, true);
   }
 
-  private damage(e: Enemy, d: number) {
+  /** Armor reduces hits but not poison. */
+  private damage(e: Enemy, d: number, isHit = false) {
     if (e.dead) return;
-    e.hp -= d;
+    e.hp -= isHit ? d * (1 - e.def.armor) : d;
     if (e.hp <= 0) {
       e.dead = true;
-      this.gold += this.curWave.gold;
+      this.gold += e.gold;
     }
   }
 
@@ -674,8 +701,8 @@ export class GameScene extends Phaser.Scene {
         info = '';
         break;
       case 'wave': {
-        const w = D.waveInfo(this.wave);
-        this.msg.setText(`Волна ${this.wave}${w.boss ? ': БОСС!' : w.fast ? ': быстрые враги' : ''}`);
+        const names = [...new Set(D.WAVES[this.wave - 1].map((g) => g.enemy.name))];
+        this.msg.setText(`Волна ${this.wave}: ${names.join(', ')}`);
         if (!sel) info = `Открыто гибридов: ${this.bestiary.size}/${D.HYBRIDS.length}`;
         break;
       }
@@ -834,8 +861,9 @@ export class GameScene extends Phaser.Scene {
         y: foot,
         draw: () => {
           const r = this.enemyRadius(e);
-          R.enemyBody(g, p.x, foot, r, e.boss ? 0x8e2bd0 : e.fast ? 0xe08a30 : 0xb83030);
+          R.enemyBody(g, p.x, foot, r, e.def.color);
           const cy = foot - r - 3;
+          if (e.def.armor > 0) g.lineStyle(3, 0xc8d0d8).strokeCircle(p.x, cy, r);
           if (this.clock < e.slowUntil) g.lineStyle(3, 0x6fa8ff).strokeCircle(p.x, cy, r + 2);
           if (this.clock < e.poisonUntil) g.lineStyle(2, 0x40e070).strokeCircle(p.x, cy, r + 5);
         },
@@ -870,6 +898,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   private enemyRadius(e: Enemy) {
-    return e.boss ? 15 : e.fast ? 8 : 10;
+    return e.def.size;
   }
 }

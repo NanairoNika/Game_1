@@ -1,0 +1,5 @@
+﻿id;name;description;speed;lives_cost;armor;immune_slow;immune_poison;size;color
+walker;Ходок;Обычный враг;1.4;1;0;нет;нет;10;#b83030
+runner;Бегун;Быстрый, но хрупкий;2.2;1;0;нет;нет;8;#e08a30
+shellback;Панцирник;Медленный, броня режет урон;1;1;40;нет;нет;12;#7a8a99
+leader;Вожак;Босс. Очень живучий;1;3;0;нет;нет;15;#8e2bd0

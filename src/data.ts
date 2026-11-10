@@ -1,4 +1,9 @@
 import type { Pt } from './path';
+import { TableReader } from './csv';
+import monstersCsv from '../data/monsters.csv?raw';
+import hybridsCsv from '../data/hybrids.csv?raw';
+import enemiesCsv from '../data/enemies.csv?raw';
+import wavesCsv from '../data/waves.csv?raw';
 
 // ---- Board ----
 export const COLS = 15;
@@ -21,160 +26,12 @@ export const WAYPOINTS: Pt[] = [
 ];
 
 export const PER_ROUND = 5;
-export const TOTAL_WAVES = 20;
 export const START_LIVES = 20;
-
-// ---- Species ----
-export const SPECIES = [
-  'flamer',
-  'jelly',
-  'rotter',
-  'swarmer',
-  'spitter',
-  'fanger',
-  'darter',
-  'howler',
-] as const;
-export type Species = (typeof SPECIES)[number];
+/** Gold for clearing wave N is WAVE_BONUS_BASE + N. */
+export const WAVE_BONUS_BASE = 5;
 
 export const LEVEL_NAMES = ['Детёныш', 'Молодой', 'Взрослый', 'Матёрый', 'Альфа'];
 export const MAX_LEVEL = LEVEL_NAMES.length - 1;
-const LEVEL_MULT = [1, 2.5, 6, 14, 32];
-
-export interface Stats {
-  name: string;
-  desc: string;
-  color: number;
-  dmg: number;
-  /** attacks per second */
-  rate: number;
-  /** in cells */
-  range: number;
-  /** splash radius in cells (50% damage) */
-  splash?: number;
-  /** slow fraction, 2 s */
-  slow?: number;
-  /** poison damage per second, 3 s */
-  poison?: number;
-  /** number of simultaneous targets */
-  targets?: number;
-  /** chance of double damage */
-  crit?: number;
-  /** attack speed bonus to allies within 2.5 cells */
-  aura?: number;
-}
-
-export const BASE: Record<Species, Stats> = {
-  flamer: { name: 'Жаровик', desc: 'Плюётся огнём по области', color: 0xe0403a, dmg: 12, rate: 0.8, range: 3, splash: 1.2 },
-  jelly: { name: 'Студень', desc: 'Липкая слизь замедляет', color: 0x3f7fe8, dmg: 8, rate: 1, range: 3.5, slow: 0.3 },
-  rotter: { name: 'Гнильник', desc: 'Отравляет', color: 0x4cb84a, dmg: 6, rate: 1, range: 3, poison: 5 },
-  swarmer: { name: 'Роевик', desc: 'Атакует несколько целей', color: 0xf0b020, dmg: 7, rate: 1, range: 3, targets: 2 },
-  spitter: { name: 'Плевун', desc: 'Бьёт очень далеко', color: 0x9a5fd8, dmg: 16, rate: 0.6, range: 5 },
-  fanger: { name: 'Клыкач', desc: 'Критические укусы', color: 0xd8d0c0, dmg: 18, rate: 0.8, range: 3, crit: 0.25 },
-  darter: { name: 'Шустрик', desc: 'Очень быстрые атаки', color: 0x40d8d0, dmg: 5, rate: 3, range: 2.5 },
-  howler: { name: 'Ревун', desc: 'Вой ускоряет соседей', color: 0xf090c8, dmg: 6, rate: 1, range: 3, aura: 0.1 },
-};
-
-export function speciesStats(sp: Species, level: number): Stats {
-  const b = BASE[sp];
-  const m = LEVEL_MULT[level];
-  return {
-    ...b,
-    name: `${b.name}: ${LEVEL_NAMES[level]}`,
-    dmg: b.dmg * m,
-    slow: b.slow && Math.min(0.6, b.slow + 0.06 * level),
-    poison: b.poison && b.poison * m,
-    targets: b.targets && b.targets + Math.floor(level / 2),
-    crit: b.crit && b.crit + 0.03 * level,
-    aura: b.aura && b.aura * (level + 1),
-  };
-}
-
-// ---- Hybrids: secret crossbreeding rules the player discovers ----
-export interface Hybrid {
-  id: string;
-  /** exact set of parents (order does not matter) */
-  parents: { sp: Species; level: number }[];
-  stats: Stats;
-}
-
-export const HYBRIDS: Hybrid[] = [
-  {
-    id: 'icehive',
-    parents: [
-      { sp: 'jelly', level: 0 },
-      { sp: 'fanger', level: 0 },
-      { sp: 'swarmer', level: 0 },
-    ],
-    stats: {
-      name: 'Ледяной рой',
-      desc: 'Замораживает до трёх целей, урон по области',
-      color: 0xbfd4ff,
-      dmg: 30,
-      rate: 1.2,
-      range: 4,
-      slow: 0.4,
-      targets: 3,
-      splash: 0.8,
-    },
-  },
-  {
-    id: 'magmaserpent',
-    parents: [
-      { sp: 'flamer', level: 1 },
-      { sp: 'flamer', level: 0 },
-      { sp: 'spitter', level: 0 },
-    ],
-    stats: {
-      name: 'Магмовый змей',
-      desc: 'Мощные залпы по большой области',
-      color: 0xff6a1a,
-      dmg: 90,
-      rate: 0.7,
-      range: 4.5,
-      splash: 1.5,
-      crit: 0.2,
-    },
-  },
-  {
-    id: 'plaguehornet',
-    parents: [
-      { sp: 'rotter', level: 0 },
-      { sp: 'howler', level: 0 },
-      { sp: 'darter', level: 0 },
-    ],
-    stats: {
-      name: 'Чумной шершень',
-      desc: 'Быстро травит до четырёх целей',
-      color: 0x0fa878,
-      dmg: 18,
-      rate: 2.5,
-      range: 3.5,
-      targets: 4,
-      poison: 12,
-    },
-  },
-  {
-    id: 'stormlizard',
-    parents: [
-      { sp: 'darter', level: 1 },
-      { sp: 'fanger', level: 1 },
-    ],
-    stats: {
-      name: 'Грозовой ящер',
-      desc: 'Молниеносные критические удары',
-      color: 0x7ad0ff,
-      dmg: 45,
-      rate: 1.8,
-      range: 3.5,
-      crit: 0.35,
-    },
-  },
-];
-
-export function parentsText(h: Hybrid): string {
-  return h.parents.map((p) => `${BASE[p.sp].name} (${LEVEL_NAMES[p.level]})`).join(' + ');
-}
 
 // ---- Quality odds (bought with gold) ----
 export const QUALITY_ODDS = [
@@ -187,16 +44,232 @@ export const QUALITY_ODDS = [
 ];
 export const UPGRADE_COST = [20, 40, 70, 110, 160];
 
-// ---- Waves ----
-export function waveInfo(w: number) {
-  const boss = w % 5 === 0;
-  const fast = !boss && w % 3 === 0;
+// =====================================================================
+// Balance tables: /data/*.csv (see docs/data.md). Levels are 1-based in
+// the tables and 0-based in code.
+// =====================================================================
+
+/** Problems found while reading the tables; the game shows them instead of starting. */
+export const DATA_ERRORS: string[] = [];
+
+export type Species = string;
+
+export interface Stats {
+  name: string;
+  desc: string;
+  color: number;
+  dmg: number;
+  /** attacks per second */
+  rate: number;
+  /** in cells */
+  range: number;
+  /** splash radius in cells (50% damage) */
+  splash?: number;
+  /** slow fraction 0..1, 2 s */
+  slow?: number;
+  /** poison damage per second, 3 s */
+  poison?: number;
+  /** number of simultaneous targets */
+  targets?: number;
+  /** chance of double damage 0..1 */
+  crit?: number;
+  /** attack speed bonus 0..1 to allies within 2.5 cells */
+  aura?: number;
+}
+
+const STAT_COLS = ['damage', 'attack_speed', 'range'];
+
+function readStats(t: TableReader, row: Parameters<TableReader['str']>[0], name: string, desc: string, color: number): Stats {
+  const opt = (col: string, scale = 1) => {
+    const v = t.num(row, col, 0);
+    return v > 0 ? v * scale : undefined;
+  };
+  const slow = opt('slow', 0.01);
+  if (slow !== undefined && slow >= 1) t.fail(row, 'slow', 'замедление должно быть меньше 100');
   return {
-    boss,
-    fast,
-    count: boss ? 1 : 10,
-    hp: Math.round(10 * Math.pow(1.3, w - 1) * (boss ? 12 : fast ? 0.7 : 1)),
-    speed: boss ? 1.0 : fast ? 2.2 : 1.4,
-    gold: boss ? 25 + w : 1 + Math.floor(w / 3),
+    name,
+    desc,
+    color,
+    dmg: t.num(row, 'damage'),
+    rate: t.num(row, 'attack_speed', undefined, 0.01),
+    range: t.num(row, 'range', undefined, 0.5),
+    splash: opt('splash'),
+    slow,
+    poison: opt('poison'),
+    targets: opt('targets'),
+    crit: opt('crit', 0.01),
+    aura: opt('aura', 0.01),
   };
 }
+
+// ---- Monsters ----
+export interface SpeciesInfo {
+  id: Species;
+  name: string;
+  desc: string;
+  color: number;
+}
+
+export const SPECIES: Species[] = [];
+export const BASE: Record<Species, SpeciesInfo> = {};
+const MONSTER_STATS = new Map<string, Stats>();
+
+{
+  const t = new TableReader('monsters.csv', monstersCsv, DATA_ERRORS, ['species', 'level', 'name', ...STAT_COLS]);
+  for (const row of t.rows) {
+    const sp = t.str(row, 'species');
+    const level = t.num(row, 'level');
+    if (!Number.isInteger(level) || level < 1 || level > LEVEL_NAMES.length) {
+      t.fail(row, 'level', `нужно целое от 1 до ${LEVEL_NAMES.length}`);
+      continue;
+    }
+    const name = t.str(row, 'name');
+    const desc = t.str(row, 'description', false);
+    const color = t.color(row, 'color');
+    if (!BASE[sp]) {
+      SPECIES.push(sp);
+      BASE[sp] = { id: sp, name, desc, color };
+    }
+    const key = `${sp}:${level - 1}`;
+    if (MONSTER_STATS.has(key)) t.fail(row, 'level', `${sp} уровня ${level} уже есть выше`);
+    MONSTER_STATS.set(key, readStats(t, row, `${name}: ${LEVEL_NAMES[level - 1]}`, desc, color));
+  }
+  for (const sp of SPECIES)
+    for (let l = 0; l < LEVEL_NAMES.length; l++)
+      if (!MONSTER_STATS.has(`${sp}:${l}`)) DATA_ERRORS.push(`monsters.csv: у «${sp}» нет строки уровня ${l + 1}`);
+  if (!SPECIES.length) DATA_ERRORS.push('monsters.csv: нет ни одного монстра');
+}
+
+export function speciesStats(sp: Species, level: number): Stats {
+  return MONSTER_STATS.get(`${sp}:${level}`)!;
+}
+
+// ---- Hybrids ----
+export interface Hybrid {
+  id: string;
+  /** exact set of parents (order does not matter), level 0-based */
+  parents: { sp: Species; level: number }[];
+  stats: Stats;
+}
+
+export const HYBRIDS: Hybrid[] = [];
+
+{
+  const t = new TableReader('hybrids.csv', hybridsCsv, DATA_ERRORS, ['id', 'name', 'parent_1', 'parent_2', ...STAT_COLS]);
+  for (const row of t.rows) {
+    const id = t.str(row, 'id');
+    if (HYBRIDS.some((h) => h.id === id)) t.fail(row, 'id', `«${id}» уже есть выше`);
+    const parents: Hybrid['parents'] = [];
+    for (let i = 1; i <= 4; i++) {
+      const col = `parent_${i}`;
+      const v = row.get(col);
+      if (!v) continue;
+      const m = /^([a-z0-9_]+)\s*[:\s]\s*(\d+)$/i.exec(v);
+      if (!m) {
+        t.fail(row, col, `«${v}»: нужно вид:уровень, например jelly:1`);
+        continue;
+      }
+      const sp = m[1];
+      const level = Number(m[2]);
+      if (!BASE[sp]) t.fail(row, col, `нет такого вида «${sp}» в monsters.csv`);
+      if (level < 1 || level > LEVEL_NAMES.length) t.fail(row, col, `уровень ${level} вне 1–${LEVEL_NAMES.length}`);
+      parents.push({ sp, level: level - 1 });
+    }
+    if (parents.length < 2) t.fail(row, 'parent_1', 'нужно минимум 2 родителя');
+    HYBRIDS.push({ id, parents, stats: readStats(t, row, t.str(row, 'name'), t.str(row, 'description', false), t.color(row, 'color')) });
+  }
+  const seen = new Map<string, string>();
+  for (const h of HYBRIDS) {
+    const key = h.parents.map((p) => `${p.sp}:${p.level}`).sort().join('+');
+    if (seen.has(key)) DATA_ERRORS.push(`hybrids.csv: у «${h.id}» и «${seen.get(key)}» одинаковые родители`);
+    seen.set(key, h.id);
+  }
+}
+
+export function parentsText(h: Hybrid): string {
+  return h.parents.map((p) => `${BASE[p.sp]?.name ?? p.sp} (${LEVEL_NAMES[p.level]})`).join(' + ');
+}
+
+// ---- Enemies ----
+export interface EnemyDef {
+  id: string;
+  name: string;
+  desc: string;
+  /** cells per second */
+  speed: number;
+  livesCost: number;
+  /** 0..1, reduces hit damage (not poison) */
+  armor: number;
+  immuneSlow: boolean;
+  immunePoison: boolean;
+  size: number;
+  color: number;
+}
+
+export const ENEMIES: Record<string, EnemyDef> = {};
+
+{
+  const t = new TableReader('enemies.csv', enemiesCsv, DATA_ERRORS, ['id', 'name', 'speed', 'lives_cost']);
+  for (const row of t.rows) {
+    const id = t.str(row, 'id');
+    if (ENEMIES[id]) t.fail(row, 'id', `«${id}» уже есть выше`);
+    const armor = t.num(row, 'armor', 0);
+    if (armor >= 100) t.fail(row, 'armor', 'броня должна быть меньше 100');
+    ENEMIES[id] = {
+      id,
+      name: t.str(row, 'name'),
+      desc: t.str(row, 'description', false),
+      speed: t.num(row, 'speed', undefined, 0.05),
+      livesCost: t.num(row, 'lives_cost', 1),
+      armor: armor / 100,
+      immuneSlow: t.bool(row, 'immune_slow'),
+      immunePoison: t.bool(row, 'immune_poison'),
+      size: t.num(row, 'size', 10, 3),
+      color: t.color(row, 'color'),
+    };
+  }
+}
+
+// ---- Waves ----
+export interface SpawnGroup {
+  enemy: EnemyDef;
+  count: number;
+  hp: number;
+  gold: number;
+  /** seconds from wave start to the first spawn of this group */
+  delay: number;
+  /** seconds between spawns */
+  interval: number;
+}
+
+/** WAVES[n - 1] is the list of groups of wave n. */
+export const WAVES: SpawnGroup[][] = [];
+
+{
+  const t = new TableReader('waves.csv', wavesCsv, DATA_ERRORS, ['wave', 'enemy', 'count', 'hp']);
+  for (const row of t.rows) {
+    const w = t.num(row, 'wave');
+    if (!Number.isInteger(w) || w < 1) {
+      t.fail(row, 'wave', 'нужно целое число от 1');
+      continue;
+    }
+    const id = t.str(row, 'enemy');
+    const enemy = ENEMIES[id];
+    if (!enemy) {
+      t.fail(row, 'enemy', `нет врага «${id}» в enemies.csv`);
+      continue;
+    }
+    (WAVES[w - 1] ??= []).push({
+      enemy,
+      count: t.num(row, 'count', undefined, 1),
+      hp: t.num(row, 'hp', undefined, 1),
+      gold: t.num(row, 'gold', 0),
+      delay: t.num(row, 'delay', 0),
+      interval: t.num(row, 'interval', 1, 0.05),
+    });
+  }
+  for (let i = 0; i < WAVES.length; i++) if (!WAVES[i]) DATA_ERRORS.push(`waves.csv: пропущена волна ${i + 1}`);
+  if (!WAVES.length) DATA_ERRORS.push('waves.csv: нет ни одной волны');
+}
+
+export const TOTAL_WAVES = WAVES.length;

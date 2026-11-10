@@ -7,6 +7,8 @@
 Играть: https://nanaironika.github.io/Game_1/
 Дизайн-документ: [docs/design.md](docs/design.md) · Роудмап: [docs/roadmap.md](docs/roadmap.md)
 
+**Баланс** (монстры, гибриды, враги, волны) лежит в таблицах в папке [`data/`](data). Справка по столбцам: [docs/data.md](docs/data.md).
+
 Стек: TypeScript + Phaser 3 + Vite. Позже его упакуем в приложения для Android и iOS через Capacitor.
 
 ## Как играть

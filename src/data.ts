@@ -4,6 +4,7 @@ import monstersCsv from '../data/monsters.csv?raw';
 import hybridsCsv from '../data/hybrids.csv?raw';
 import enemiesCsv from '../data/enemies.csv?raw';
 import wavesCsv from '../data/waves.csv?raw';
+import mazesTxt from '../data/mazes.txt?raw';
 
 // ---- Board ----
 export const COLS = 15;
@@ -14,7 +15,7 @@ export const CELL_H = 38;
 /** Visual height of cages and sealed blocks above the ground. */
 export const OBJ_H = 20;
 export const GRID_X = (720 - COLS * CELL_W) / 2;
-export const GRID_Y = 130;
+export const GRID_Y = 170;
 
 /** Spawn -> checkpoints -> exit. Nothing can be placed on these cells. */
 export const WAYPOINTS: Pt[] = [
@@ -273,3 +274,59 @@ export const WAVES: SpawnGroup[][] = [];
 }
 
 export const TOTAL_WAVES = WAVES.length;
+
+// ---- Maze blueprints (data/mazes.txt) ----
+export interface Maze {
+  name: string;
+  desc: string;
+  /** cell index (y * COLS + x) -> build stage 1..3 */
+  cells: Map<number, number>;
+  focus: Pt | null;
+  stages: number;
+}
+
+export const MAZES: Maze[] = [];
+
+{
+  const file = 'mazes.txt';
+  const lines = mazesTxt.replace(/^﻿/, '').split(/\r?\n/);
+  let cur: { name: string; desc: string; line: number; rows: string[] } | null = null;
+  const finish = () => {
+    if (!cur) return;
+    const { name, desc, line, rows } = cur;
+    if (rows.length !== ROWS) {
+      DATA_ERRORS.push(`${file}, схема «${name}» (строка ${line}): ${rows.length} строк вместо ${ROWS}`);
+      return;
+    }
+    const maze: Maze = { name, desc, cells: new Map(), focus: null, stages: 1 };
+    rows.forEach((row, y) => {
+      if (row.length !== COLS) DATA_ERRORS.push(`${file}, схема «${name}»: в строке поля ${y + 1} ${row.length} символов вместо ${COLS}`);
+      [...row].forEach((ch, x) => {
+        const wp = WAYPOINTS.some((w) => w.x === x && w.y === y);
+        if (ch === 'o' || ch === 'о') {
+          if (!wp) DATA_ERRORS.push(`${file}, схема «${name}»: «o» в клетке ${x + 1},${y + 1}, а контрольной точки там нет`);
+          return;
+        }
+        if (wp && ch !== '.') DATA_ERRORS.push(`${file}, схема «${name}»: клетка ${x + 1},${y + 1} — контрольная точка, там должно быть «o»`);
+        if (ch === '.' || wp) return;
+        if (ch === '@') {
+          maze.focus = { x, y };
+          maze.cells.set(y * COLS + x, 1);
+        } else if (/[1-9]/.test(ch)) {
+          maze.cells.set(y * COLS + x, Number(ch));
+          maze.stages = Math.max(maze.stages, Number(ch));
+        } else DATA_ERRORS.push(`${file}, схема «${name}»: непонятный символ «${ch}» в клетке ${x + 1},${y + 1}`);
+      });
+    });
+    MAZES.push(maze);
+  };
+  lines.forEach((raw, i) => {
+    const l = raw.trim();
+    if (l.startsWith('===')) {
+      finish();
+      const [name, desc = ''] = l.slice(3).split('|').map((t) => t.trim());
+      cur = { name: name || `Схема ${MAZES.length + 1}`, desc, line: i + 1, rows: [] };
+    } else if (l && !l.startsWith('#') && cur) cur.rows.push(l);
+  });
+  finish();
+}

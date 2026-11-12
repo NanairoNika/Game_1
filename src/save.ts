@@ -45,3 +45,23 @@ export const saveRun = (s: RunSave | null) => write(RUN_KEY, s);
 
 export const loadBestiary = () => new Set(read<string[]>(BESTIARY_KEY) ?? []);
 export const saveBestiary = (ids: Set<string>) => write(BESTIARY_KEY, [...ids]);
+
+const MAZE_KEY = 'gd.maze.v1';
+
+/** Index of the chosen maze blueprint, or -1 for none. */
+export function loadMazeChoice(): number {
+  try {
+    const v = Number(localStorage.getItem(MAZE_KEY));
+    return Number.isInteger(v) ? v : -1;
+  } catch {
+    return -1;
+  }
+}
+
+export function saveMazeChoice(i: number) {
+  try {
+    localStorage.setItem(MAZE_KEY, String(i));
+  } catch {
+    /* ignore */
+  }
+}

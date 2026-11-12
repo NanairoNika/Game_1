@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import * as D from './data';
 import { fullPath, type Pt } from './path';
-import { loadBestiary, loadRun, saveBestiary, saveRun, type RunSave } from './save';
+import { loadBestiary, loadMazeChoice, loadRun, saveBestiary, saveMazeChoice, saveRun, type RunSave } from './save';
 import * as R from './render';
 
 type Unit = {
@@ -67,6 +67,9 @@ export class GameScene extends Phaser.Scene {
   private bestiary!: Set<string>;
   private overlay: Phaser.GameObjects.GameObject[] = [];
   private sealEnd = 0;
+  /** chosen maze blueprint, -1 = none */
+  private mazeIdx = -1;
+  private mazeChips: { bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[] = [];
 
   private boardG!: Phaser.GameObjects.Graphics;
   private dynG!: Phaser.GameObjects.Graphics;
@@ -118,6 +121,7 @@ export class GameScene extends Phaser.Scene {
 
     this.hud = this.add.text(20, 18, '', { fontSize: '25px', color: '#f2ead0', fontStyle: 'bold', lineSpacing: 6 });
     this.topButton(505, 'Бестиарий', 160, () => this.openBestiary());
+    this.createMazeChips();
     this.speedLabel = this.topButton(650, 'x1', 100, () => {
       this.speed = this.speed >= 3 ? 1 : this.speed + 1;
       this.speedLabel.setText(`x${this.speed}`);
@@ -153,6 +157,87 @@ export class GameScene extends Phaser.Scene {
       wordWrap: { width: 660 },
       lineSpacing: 6,
     });
+  }
+
+  // ---------- maze blueprints ----------
+  private createMazeChips() {
+    this.mazeIdx = loadMazeChoice();
+    if (this.mazeIdx >= D.MAZES.length) this.mazeIdx = -1;
+    const labels = ['Без схемы', ...D.MAZES.map((m) => m.name)];
+    const gap = 8;
+    const w = (680 - gap * (labels.length - 1)) / labels.length;
+    this.mazeChips = labels.map((text, i) => {
+      const x = 20 + i * (w + gap) + w / 2;
+      const bg = this.add.rectangle(x, 120, w, 44, 0x2a3324).setInteractive();
+      const label = this.add
+        .text(x, 120, text, { fontSize: labels.length > 4 ? '19px' : '21px', fontStyle: 'bold', color: '#e8e0c8', align: 'center', wordWrap: { width: w - 8 } })
+        .setOrigin(0.5);
+      bg.on('pointerdown', () => {
+        if (this.overlay.length) return;
+        this.mazeIdx = i - 1;
+        saveMazeChoice(this.mazeIdx);
+        this.refresh();
+      });
+      return { bg, label };
+    });
+  }
+
+  private updateMazeChips() {
+    this.mazeChips.forEach(({ bg, label }, i) => {
+      const on = i - 1 === this.mazeIdx;
+      bg.setFillStyle(on ? 0x7a5a1a : 0x2a3324).setStrokeStyle(2, on ? 0xffe066 : 0x55654a);
+      label.setColor(on ? '#ffffff' : '#bfc8b4');
+    });
+  }
+
+  private get maze() {
+    return this.mazeIdx >= 0 ? D.MAZES[this.mazeIdx] : null;
+  }
+
+  /** First stage of the blueprint that still has unbuilt cells (stages + 1 when done). */
+  private mazeStage() {
+    const m = this.maze!;
+    for (let st = 1; st <= m.stages; st++)
+      for (const [idx, s] of m.cells) if (s === st && !this.grid[Math.floor(idx / D.COLS)][idx % D.COLS]) return st;
+    return m.stages + 1;
+  }
+
+  private mazeInfo() {
+    const m = this.maze!;
+    const st = this.mazeStage();
+    if (st > m.stages) return `Схема «${m.name}» построена полностью.`;
+    let left = 0;
+    for (const [idx, s] of m.cells) if (s === st && !this.grid[Math.floor(idx / D.COLS)][idx % D.COLS]) left++;
+    return `Схема «${m.name}»: этап ${st} из ${m.stages}, осталось ${left} клеток (яркие крестики).`;
+  }
+
+  private drawMaze(g: Phaser.GameObjects.Graphics) {
+    const m = this.maze;
+    if (!m) return;
+    if (m.focus) {
+      const c = this.center(m.focus);
+      g.fillStyle(0xffe066, 0.06).fillEllipse(c.x, c.y, 6 * D.CELL_W, 6 * D.CELL_H);
+      g.lineStyle(2, 0xffe066, 0.35).strokeEllipse(c.x, c.y, 6 * D.CELL_W, 6 * D.CELL_H);
+    }
+    const st = this.mazeStage();
+    for (const [idx, s] of m.cells) {
+      const x = idx % D.COLS;
+      const y = Math.floor(idx / D.COLS);
+      if (this.grid[y][x]) continue;
+      const o = this.origin({ x, y });
+      const now = s === st;
+      const d = 11;
+      const cx = o.x + D.CELL_W / 2;
+      const cy = o.y + D.CELL_H / 2;
+      if (m.focus && m.focus.x === x && m.focus.y === y) {
+        g.lineStyle(3, 0xffe066, 0.95).strokeCircle(cx, cy, 13);
+        g.fillStyle(0xffe066, 0.95).fillCircle(cx, cy, 4);
+        continue;
+      }
+      g.lineStyle(now ? 3 : 2, now ? 0xffe066 : 0xffffff, now ? 0.9 : 0.22);
+      g.lineBetween(cx - d, cy - d * 0.8, cx + d, cy + d * 0.8);
+      g.lineBetween(cx - d, cy + d * 0.8, cx + d, cy - d * 0.8);
+    }
   }
 
   // ---------- save / load ----------
@@ -643,7 +728,7 @@ export class GameScene extends Phaser.Scene {
     switch (this.phase) {
       case 'build': {
         this.msg.setText(`Подселите монстров: ${this.fresh.length}/${D.PER_ROUND}`);
-        if (!sel) info = `Нажмите на пустую клетку. Шансы: ${this.oddsText()}`;
+        if (!sel) info = `${this.maze ? this.mazeInfo() + '\n' : 'Нажмите на пустую клетку. '}Шансы: ${this.oddsText()}`;
         if (this.chance < D.UPGRADE_COST.length) {
           const cost = D.UPGRADE_COST[this.chance];
           specs.push({
@@ -721,6 +806,7 @@ export class GameScene extends Phaser.Scene {
     this.info.setY(this.msg.y + this.msg.height + 8);
     this.layoutButtons(specs);
     this.updateHud();
+    this.updateMazeChips();
     this.drawBoard();
     this.persist();
   }
@@ -794,6 +880,8 @@ export class GameScene extends Phaser.Scene {
       g.fillStyle(0x000000, 0.3).fillEllipse(c.x, c.y + 3, D.CELL_W * 0.86, D.CELL_H * 0.8);
       g.fillStyle(0xd9b13b).fillEllipse(c.x, c.y, D.CELL_W * 0.82, D.CELL_H * 0.74);
     }
+
+    this.drawMaze(g);
 
     for (const u of this.fresh) {
       const o = this.origin(u);

@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import * as D from './data';
-import { fullPath, type Pt } from './path';
+import { fullPath, pathLength, type Pt } from './path';
 import { loadBestiary, loadMazeChoice, loadRun, saveBestiary, saveMazeChoice, saveRun, type RunSave } from './save';
 import * as R from './render';
 
@@ -69,7 +69,7 @@ export class GameScene extends Phaser.Scene {
   private sealEnd = 0;
   /** chosen maze blueprint, -1 = none */
   private mazeIdx = -1;
-  private mazeChips: { bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text }[] = [];
+  private mazeLabel!: Phaser.GameObjects.Text;
 
   private boardG!: Phaser.GameObjects.Graphics;
   private dynG!: Phaser.GameObjects.Graphics;
@@ -116,12 +116,12 @@ export class GameScene extends Phaser.Scene {
     D.WAYPOINTS.forEach((w, i) => {
       const c = this.center(w);
       const label = i === 0 ? 'S' : i === D.WAYPOINTS.length - 1 ? 'E' : String(i);
-      this.add.text(c.x, c.y, label, { fontSize: '22px', fontStyle: 'bold', color: '#2a1d05' }).setOrigin(0.5);
+      this.add.text(c.x, c.y, label, { fontSize: '22px', fontStyle: 'bold', color: '#2a1d05' }).setOrigin(0.5).setDepth(5);
     });
 
     this.hud = this.add.text(20, 18, '', { fontSize: '25px', color: '#f2ead0', fontStyle: 'bold', lineSpacing: 6 });
     this.topButton(505, 'Бестиарий', 160, () => this.openBestiary());
-    this.createMazeChips();
+    this.createMazeButton();
     this.speedLabel = this.topButton(650, 'x1', 100, () => {
       this.speed = this.speed >= 3 ? 1 : this.speed + 1;
       this.speedLabel.setText(`x${this.speed}`);
@@ -160,34 +160,135 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ---------- maze blueprints ----------
-  private createMazeChips() {
+  private createMazeButton() {
     this.mazeIdx = loadMazeChoice();
     if (this.mazeIdx >= D.MAZES.length) this.mazeIdx = -1;
-    const labels = ['Без схемы', ...D.MAZES.map((m) => m.name)];
-    const gap = 8;
-    const w = (680 - gap * (labels.length - 1)) / labels.length;
-    this.mazeChips = labels.map((text, i) => {
-      const x = 20 + i * (w + gap) + w / 2;
-      const bg = this.add.rectangle(x, 120, w, 44, 0x2a3324).setInteractive();
-      const label = this.add
-        .text(x, 120, text, { fontSize: labels.length > 4 ? '19px' : '21px', fontStyle: 'bold', color: '#e8e0c8', align: 'center', wordWrap: { width: w - 8 } })
-        .setOrigin(0.5);
-      bg.on('pointerdown', () => {
-        if (this.overlay.length) return;
-        this.mazeIdx = i - 1;
-        saveMazeChoice(this.mazeIdx);
-        this.refresh();
-      });
-      return { bg, label };
-    });
+    const bg = this.add.rectangle(360, 120, 680, 44, 0x2a3324).setStrokeStyle(2, 0x8fa870).setInteractive();
+    this.mazeLabel = this.add.text(360, 120, '', { fontSize: '22px', fontStyle: 'bold', color: '#f2ead0' }).setOrigin(0.5);
+    bg.on('pointerdown', () => this.openMazePicker());
   }
 
-  private updateMazeChips() {
-    this.mazeChips.forEach(({ bg, label }, i) => {
-      const on = i - 1 === this.mazeIdx;
-      bg.setFillStyle(on ? 0x7a5a1a : 0x2a3324).setStrokeStyle(2, on ? 0xffe066 : 0x55654a);
-      label.setColor(on ? '#ffffff' : '#bfc8b4');
+  private updateMazeButton() {
+    this.mazeLabel.setText(`Схема лабиринта: ${this.maze ? this.maze.name : 'нет'}  ▾`);
+  }
+
+  private closeOverlay() {
+    for (const o of this.overlay) o.destroy();
+    this.overlay = [];
+  }
+
+  /** Window with a miniature of every blueprint: tap one to choose it. */
+  private openMazePicker() {
+    if (this.overlay.length) return;
+    const objs: Phaser.GameObjects.GameObject[] = [];
+    objs.push(this.add.rectangle(360, 640, 720, 1280, 0x0b0f0b, 0.97).setInteractive().setDepth(100));
+    objs.push(
+      this.add
+        .text(360, 40, 'Выберите схему лабиринта', { fontSize: '30px', fontStyle: 'bold', color: '#ffe9a8' })
+        .setOrigin(0.5)
+        .setDepth(101),
+    );
+    objs.push(
+      this.add
+        .text(360, 80, 'Крестики: жёлтые — этап 1, оранжевые — 2, серые — 3. Линия — путь врагов', {
+          fontSize: '18px',
+          color: '#bfc8b4',
+          align: 'center',
+          wordWrap: { width: 680 },
+        })
+        .setOrigin(0.5, 0)
+        .setDepth(101),
+    );
+    const g = this.add.graphics().setDepth(101);
+    objs.push(g);
+
+    const entries = [-1, ...D.MAZES.map((_, i) => i)];
+    const cardW = 335;
+    const cardH = 330;
+    const cw = 14;
+    const ch = 11;
+    const baseLen = pathLength(fullPath(D.COLS, D.ROWS, () => false, D.WAYPOINTS)!);
+    entries.forEach((idx, n) => {
+      const x0 = 20 + (n % 2) * (cardW + 10);
+      const y0 = 130 + Math.floor(n / 2) * (cardH + 12);
+      const m = idx >= 0 ? D.MAZES[idx] : null;
+      const chosen = idx === this.mazeIdx;
+      const card = this.add
+        .rectangle(x0 + cardW / 2, y0 + cardH / 2, cardW, cardH, chosen ? 0x3a3018 : 0x1c2419)
+        .setStrokeStyle(chosen ? 4 : 2, chosen ? 0xffe066 : 0x45553a)
+        .setInteractive()
+        .setDepth(100.5);
+      card.on('pointerdown', () => {
+        this.mazeIdx = idx;
+        saveMazeChoice(idx);
+        this.closeOverlay();
+        this.refresh();
+      });
+      objs.push(card);
+      objs.push(
+        this.add
+          .text(x0 + cardW / 2, y0 + 22, m ? m.name : 'Без схемы', { fontSize: '24px', fontStyle: 'bold', color: chosen ? '#ffe066' : '#f2ead0' })
+          .setOrigin(0.5)
+          .setDepth(101),
+      );
+
+      // miniature board
+      const gx = x0 + (cardW - D.COLS * cw) / 2;
+      const gy = y0 + 44;
+      const cell = (p: Pt) => ({ x: gx + p.x * cw + cw / 2, y: gy + p.y * ch + ch / 2 });
+      for (let y = 0; y < D.ROWS; y++)
+        for (let x = 0; x < D.COLS; x++) {
+          g.fillStyle((x + y) % 2 ? 0x2a3d2c : 0x24362a).fillRect(gx + x * cw, gy + y * ch, cw, ch);
+        }
+      const blocked = (x: number, y: number) => !!m && m.cells.has(y * D.COLS + x);
+      const path = fullPath(D.COLS, D.ROWS, blocked, D.WAYPOINTS);
+      if (m?.focus) {
+        const c = cell(m.focus);
+        g.lineStyle(1.5, 0xffe066, 0.5).strokeEllipse(c.x, c.y, 6 * cw, 6 * ch);
+      }
+      if (path) {
+        g.lineStyle(2, 0xd9a24a, 0.85).beginPath();
+        path.forEach((p, i) => {
+          const c = cell(p);
+          if (i === 0) g.moveTo(c.x, c.y);
+          else g.lineTo(c.x, c.y);
+        });
+        g.strokePath();
+      }
+      if (m)
+        for (const [ci, st] of m.cells) {
+          const c = cell({ x: ci % D.COLS, y: Math.floor(ci / D.COLS) });
+          const col = st === 1 ? 0xffe066 : st === 2 ? 0xf08a3a : 0x9aa3ad;
+          g.lineStyle(1.6, col);
+          g.lineBetween(c.x - 4, c.y - 3.5, c.x + 4, c.y + 3.5);
+          g.lineBetween(c.x - 4, c.y + 3.5, c.x + 4, c.y - 3.5);
+        }
+      if (m?.focus) {
+        const c = cell(m.focus);
+        g.fillStyle(0xffe066).fillCircle(c.x, c.y, 3.5);
+      }
+      for (const w of D.WAYPOINTS) {
+        const c = cell(w);
+        g.fillStyle(0xd9b13b).fillCircle(c.x, c.y, 4.5);
+      }
+
+      const len = path ? pathLength(path) : 0;
+      const stats = m
+        ? `${m.cells.size} клеток · путь ×${(len / baseLen).toFixed(1)}`
+        : 'Строите как хотите';
+      objs.push(
+        this.add
+          .text(x0 + cardW / 2, y0 + cardH - 26, stats, { fontSize: '19px', color: '#cfd8c8' })
+          .setOrigin(0.5)
+          .setDepth(101),
+      );
     });
+
+    const close = this.add.rectangle(360, 1220, 680, 80, 0x4a4a4a).setStrokeStyle(3, 0xf0e0a0).setInteractive().setDepth(101);
+    const closeT = this.add.text(360, 1220, 'Закрыть', { fontSize: '26px', fontStyle: 'bold', color: '#fff' }).setOrigin(0.5).setDepth(102);
+    close.on('pointerdown', () => this.closeOverlay());
+    objs.push(close, closeT);
+    this.overlay = objs;
   }
 
   private get maze() {
@@ -806,7 +907,7 @@ export class GameScene extends Phaser.Scene {
     this.info.setY(this.msg.y + this.msg.height + 8);
     this.layoutButtons(specs);
     this.updateHud();
-    this.updateMazeChips();
+    this.updateMazeButton();
     this.drawBoard();
     this.persist();
   }

@@ -9,7 +9,7 @@
  * Prints the best layout as a grid: X = build here, @ = focus (build the strongest monster here).
  */
 import { readFileSync } from 'node:fs';
-import { fullPath, type Pt } from '../src/path.ts';
+import { fullPath, pathLength, type Pt } from '../src/path.ts';
 
 // Keep in sync with src/data.ts
 const COLS = 15;
@@ -43,11 +43,12 @@ export function evaluate(blocked: Uint8Array) {
   let zone = 0;
   let legsIn = 0;
   for (const leg of legs) {
-    len += leg.length - 1;
+    len += pathLength(leg);
     const z = leg.filter(inZone).length;
     zone += z;
     if (z > 0) legsIn++;
   }
+  len = Math.round(len);
   return { len, zone, legsIn, score: len + 3 * zone + 40 * legsIn };
 }
 

@@ -17,7 +17,7 @@ export const OBJ_H = 20;
 export const GRID_X = (720 - COLS * CELL_W) / 2;
 export const GRID_Y = 170;
 
-/** Spawn -> checkpoints -> exit. Nothing can be placed on these cells. */
+/** Default Spawn -> Terminals (1..3) -> Mainframe (E). Maps can override this. */
 export const WAYPOINTS: Pt[] = [
   { x: 7, y: 0 },
   { x: 1, y: 5 },
@@ -76,17 +76,26 @@ export interface Stats {
   crit?: number;
   /** attack speed bonus 0..1 to allies within 2.5 cells */
   aura?: number;
+  /** whether this unit can target flying enemies */
+  antiAir?: boolean;
 }
 
 const STAT_COLS = ['damage', 'attack_speed', 'range'];
 
-function readStats(t: TableReader, row: Parameters<TableReader['str']>[0], name: string, desc: string, color: number): Stats {
+function readStats(
+  t: TableReader,
+  row: Parameters<TableReader['str']>[0],
+  name: string,
+  desc: string,
+  color: number,
+): Stats {
   const opt = (col: string, scale = 1) => {
     const v = t.num(row, col, 0);
     return v > 0 ? v * scale : undefined;
   };
   const slow = opt('slow', 0.01);
   if (slow !== undefined && slow >= 1) t.fail(row, 'slow', 'замедление должно быть меньше 100');
+  const antiAir = t.bool(row, 'anti_air');
   return {
     name,
     desc,
@@ -100,6 +109,7 @@ function readStats(t: TableReader, row: Parameters<TableReader['str']>[0], name:
     targets: opt('targets'),
     crit: opt('crit', 0.01),
     aura: opt('aura', 0.01),
+    antiAir: antiAir || undefined,
   };
 }
 
@@ -109,6 +119,7 @@ export interface SpeciesInfo {
   name: string;
   desc: string;
   color: number;
+  antiAir: boolean;
 }
 
 export const SPECIES: Species[] = [];
@@ -127,13 +138,16 @@ const MONSTER_STATS = new Map<string, Stats>();
     const name = t.str(row, 'name');
     const desc = t.str(row, 'description', false);
     const color = t.color(row, 'color');
+    const stats = readStats(t, row, `${name}: ${LEVEL_NAMES[level - 1]}`, desc, color);
     if (!BASE[sp]) {
       SPECIES.push(sp);
-      BASE[sp] = { id: sp, name, desc, color };
+      BASE[sp] = { id: sp, name, desc, color, antiAir: !!stats.antiAir };
+    } else if (stats.antiAir) {
+      BASE[sp].antiAir = true;
     }
     const key = `${sp}:${level - 1}`;
     if (MONSTER_STATS.has(key)) t.fail(row, 'level', `${sp} уровня ${level} уже есть выше`);
-    MONSTER_STATS.set(key, readStats(t, row, `${name}: ${LEVEL_NAMES[level - 1]}`, desc, color));
+    MONSTER_STATS.set(key, stats);
   }
   for (const sp of SPECIES)
     for (let l = 0; l < LEVEL_NAMES.length; l++)
@@ -146,49 +160,84 @@ export function speciesStats(sp: Species, level: number): Stats {
 }
 
 // ---- Hybrids ----
+export interface HybridParent {
+  /** Either a base monster (sp + 0-based level) or another hybrid id */
+  sp?: Species;
+  level?: number;
+  hybrid?: string;
+}
+
 export interface Hybrid {
   id: string;
-  /** exact set of parents (order does not matter), level 0-based */
-  parents: { sp: Species; level: number }[];
+  /** exact set of parents (order does not matter) */
+  parents: HybridParent[];
   stats: Stats;
 }
 
 export const HYBRIDS: Hybrid[] = [];
 
 {
-  const t = new TableReader('hybrids.csv', hybridsCsv, DATA_ERRORS, ['id', 'name', 'parent_1', 'parent_2', ...STAT_COLS]);
+  const t = new TableReader('hybrids.csv', hybridsCsv, DATA_ERRORS, [
+    'id',
+    'name',
+    'parent_1',
+    'parent_2',
+    ...STAT_COLS,
+  ]);
   for (const row of t.rows) {
     const id = t.str(row, 'id');
     if (HYBRIDS.some((h) => h.id === id)) t.fail(row, 'id', `«${id}» уже есть выше`);
-    const parents: Hybrid['parents'] = [];
+    const parents: HybridParent[] = [];
     for (let i = 1; i <= 4; i++) {
       const col = `parent_${i}`;
       const v = row.get(col);
       if (!v) continue;
       const m = /^([a-z0-9_]+)\s*[:\s]\s*(\d+)$/i.exec(v);
-      if (!m) {
-        t.fail(row, col, `«${v}»: нужно вид:уровень, например jelly:1`);
-        continue;
+      if (m) {
+        const sp = m[1];
+        const level = Number(m[2]);
+        if (!BASE[sp]) t.fail(row, col, `нет такого вида «${sp}» в monsters.csv`);
+        if (level < 1 || level > LEVEL_NAMES.length) t.fail(row, col, `уровень ${level} вне 1–${LEVEL_NAMES.length}`);
+        parents.push({ sp, level: level - 1 });
+      } else if (/^[a-z0-9_]+$/i.test(v)) {
+        parents.push({ hybrid: v });
+      } else {
+        t.fail(row, col, `«${v}»: нужно вид:уровень (например jelly:1) или id гибрида`);
       }
-      const sp = m[1];
-      const level = Number(m[2]);
-      if (!BASE[sp]) t.fail(row, col, `нет такого вида «${sp}» в monsters.csv`);
-      if (level < 1 || level > LEVEL_NAMES.length) t.fail(row, col, `уровень ${level} вне 1–${LEVEL_NAMES.length}`);
-      parents.push({ sp, level: level - 1 });
     }
     if (parents.length < 2) t.fail(row, 'parent_1', 'нужно минимум 2 родителя');
-    HYBRIDS.push({ id, parents, stats: readStats(t, row, t.str(row, 'name'), t.str(row, 'description', false), t.color(row, 'color')) });
+    HYBRIDS.push({
+      id,
+      parents,
+      stats: readStats(t, row, t.str(row, 'name'), t.str(row, 'description', false), t.color(row, 'color')),
+    });
   }
   const seen = new Map<string, string>();
   for (const h of HYBRIDS) {
-    const key = h.parents.map((p) => `${p.sp}:${p.level}`).sort().join('+');
+    for (const p of h.parents) {
+      if (p.hybrid && !HYBRIDS.some((other) => other.id === p.hybrid)) {
+        DATA_ERRORS.push(`hybrids.csv: у «${h.id}» неизвестный гибрид-родитель «${p.hybrid}»`);
+      }
+    }
+    const key = h.parents
+      .map((p) => (p.hybrid ? `H:${p.hybrid}` : `${p.sp}:${p.level}`))
+      .sort()
+      .join('+');
     if (seen.has(key)) DATA_ERRORS.push(`hybrids.csv: у «${h.id}» и «${seen.get(key)}» одинаковые родители`);
     seen.set(key, h.id);
   }
 }
 
 export function parentsText(h: Hybrid): string {
-  return h.parents.map((p) => `${BASE[p.sp]?.name ?? p.sp} (${LEVEL_NAMES[p.level]})`).join(' + ');
+  return h.parents
+    .map((p) => {
+      if (p.hybrid) {
+        const found = HYBRIDS.find((x) => x.id === p.hybrid);
+        return found ? found.stats.name : p.hybrid;
+      }
+      return `${BASE[p.sp!]?.name ?? p.sp} (${LEVEL_NAMES[p.level!]})`;
+    })
+    .join(' + ');
 }
 
 // ---- Enemies ----
@@ -203,6 +252,14 @@ export interface EnemyDef {
   armor: number;
   immuneSlow: boolean;
   immunePoison: boolean;
+  /** flies directly from waypoint to waypoint ignoring the maze */
+  flying: boolean;
+  /** HP regenerated per second */
+  regen: number;
+  /** enemy id spawned when this enemy dies */
+  splitInto?: string;
+  /** number of split children spawned */
+  splitCount: number;
   size: number;
   color: number;
 }
@@ -216,6 +273,8 @@ export const ENEMIES: Record<string, EnemyDef> = {};
     if (ENEMIES[id]) t.fail(row, 'id', `«${id}» уже есть выше`);
     const armor = t.num(row, 'armor', 0);
     if (armor >= 100) t.fail(row, 'armor', 'броня должна быть меньше 100');
+    const splitInto = t.str(row, 'split_into', false);
+    const splitCount = t.num(row, 'split_count', 0);
     ENEMIES[id] = {
       id,
       name: t.str(row, 'name'),
@@ -225,9 +284,18 @@ export const ENEMIES: Record<string, EnemyDef> = {};
       armor: armor / 100,
       immuneSlow: t.bool(row, 'immune_slow'),
       immunePoison: t.bool(row, 'immune_poison'),
+      flying: t.bool(row, 'flying'),
+      regen: t.num(row, 'regen', 0),
+      splitInto: splitInto || undefined,
+      splitCount: splitInto ? Math.max(1, Math.round(splitCount || 2)) : 0,
       size: t.num(row, 'size', 10, 3),
       color: t.color(row, 'color'),
     };
+  }
+  for (const e of Object.values(ENEMIES)) {
+    if (e.splitInto && !ENEMIES[e.splitInto]) {
+      DATA_ERRORS.push(`enemies.csv: у «${e.id}» неизвестный split_into «${e.splitInto}»`);
+    }
   }
 }
 

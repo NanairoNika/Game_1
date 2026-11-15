@@ -2,6 +2,7 @@ import type { Species } from './data';
 
 const RUN_KEY = 'gd.run.v1';
 const BESTIARY_KEY = 'gd.bestiary.v1';
+const META_KEY = 'gd.meta.v1';
 
 export interface SavedCell {
   x: number;
@@ -10,9 +11,12 @@ export interface SavedCell {
   sp?: Species;
   level?: number;
   hybrid?: string;
+  /** true if this sealed block is a permanent map pillar */
+  pillar?: boolean;
 }
 
 export interface RunSave {
+  levelId?: string;
   wave: number;
   lives: number;
   gold: number;
@@ -20,6 +24,23 @@ export interface RunSave {
   cells: SavedCell[];
   /** indices into `cells` of creatures placed this round */
   fresh: number[];
+  seenNotes?: number[];
+  usedGadgets?: boolean;
+}
+
+export interface MetaSave {
+  /** Best star rating (1..3) achieved per levelId */
+  stars: Record<string, number>;
+  /** Level IDs cleared in hardcore mode (no gadgets used) */
+  hardcoreCleared: string[];
+  /** Energy cores (premium currency earned from stars & bestiary) */
+  cores: number;
+  /** Lab upgrade levels */
+  upgrades: Partial<Record<'firewall' | 'grant' | 'overclock' | 'salvage', number>>;
+  /** Currently selected map id */
+  currentLevel: string;
+  /** Hardcore mode toggle (disables in-battle gadgets) */
+  hardcore: boolean;
 }
 
 function read<T>(key: string): T | null {
@@ -65,3 +86,27 @@ export function saveMazeChoice(i: number) {
     /* ignore */
   }
 }
+
+const DEFAULT_META: MetaSave = {
+  stars: {},
+  hardcoreCleared: [],
+  cores: 3,
+  upgrades: {},
+  currentLevel: 'doof',
+  hardcore: false,
+};
+
+export function loadMeta(): MetaSave {
+  const m = read<Partial<MetaSave>>(META_KEY);
+  if (!m || typeof m !== 'object') return { ...DEFAULT_META, stars: {}, hardcoreCleared: [], upgrades: {} };
+  return {
+    stars: m.stars && typeof m.stars === 'object' ? m.stars : {},
+    hardcoreCleared: Array.isArray(m.hardcoreCleared) ? m.hardcoreCleared : [],
+    cores: typeof m.cores === 'number' && Number.isFinite(m.cores) ? m.cores : 3,
+    upgrades: m.upgrades && typeof m.upgrades === 'object' ? m.upgrades : {},
+    currentLevel: typeof m.currentLevel === 'string' ? m.currentLevel : 'doof',
+    hardcore: !!m.hardcore,
+  };
+}
+
+export const saveMeta = (m: MetaSave) => write(META_KEY, m);

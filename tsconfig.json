@@ -8,5 +8,6 @@
     "skipLibCheck": true,
     "lib": ["ES2020", "DOM"]
   },
-  "include": ["src"]
+  "include": ["src", "tools"],
+  "exclude": ["tools/maze-search.ts"]
 }

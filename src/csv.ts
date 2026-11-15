@@ -10,13 +10,12 @@ export type Row = { line: number; get: (col: string) => string };
 export class TableReader {
   readonly rows: Row[] = [];
   readonly columns: string[] = [];
+  readonly file: string;
+  private readonly errors: string[];
 
-  constructor(
-    readonly file: string,
-    text: string,
-    private readonly errors: string[],
-    required: string[],
-  ) {
+  constructor(file: string, text: string, errors: string[], required: string[]) {
+    this.file = file;
+    this.errors = errors;
     const lines = text.replace(/^﻿/, '').split(/\r?\n/);
     const headerIdx = lines.findIndex((l) => l.trim() && !l.trim().startsWith('#'));
     if (headerIdx < 0) {

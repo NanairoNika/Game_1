@@ -1,5 +1,16 @@
-﻿id;name;description;color;parent_1;parent_2;parent_3;parent_4;damage;attack_speed;range;splash;slow;poison;targets;crit;aura
-icehive;Ледяной рой;Замораживает до трёх целей, урон по области;#bfd4ff;jelly:1;fanger:1;swarmer:1;;30;1.2;4;0.8;40;;3;;
-magmaserpent;Магмовый змей;Мощные залпы по большой области;#ff6a1a;flamer:2;flamer:1;spitter:1;;90;0.7;4.5;1.5;;;;20;
-plaguehornet;Чумной шершень;Быстро травит до четырёх целей;#0fa878;rotter:1;howler:1;darter:1;;18;2.5;3.5;;;12;4;;
-stormlizard;Грозовой ящер;Молниеносные критические удары;#7ad0ff;darter:2;fanger:2;;;45;1.8;3.5;;;;;35;
+﻿id;name;description;color;parent_1;parent_2;parent_3;parent_4;damage;attack_speed;range;splash;slow;poison;targets;crit;aura;anti_air
+icehive;Ледяной рой;Замораживает до трёх целей, урон по области;#bfd4ff;jelly:1;fanger:1;swarmer:1;;30;1.2;4;0.8;40;;3;;;да
+magmaserpent;Магмовый змей;Мощные залпы по большой области;#ff6a1a;flamer:2;flamer:1;spitter:1;;90;0.7;4.5;1.5;;;;20;;да
+plaguehornet;Чумной шершень;Быстро травит до четырёх целей;#0fa878;rotter:1;howler:1;darter:1;;18;2.5;3.5;;;12;4;;;да
+stormlizard;Грозовой ящер;Молниеносные критические удары;#7ad0ff;darter:2;fanger:2;;;45;1.8;3.5;;;;;35;;нет
+napalmjelly;Напалмовый студень;Поджигает и склеивает толпу;#ff8844;flamer:1;jelly:1;;;22;1.0;3.5;1.3;35;;;;;нет
+acidspitter;Кислотный снайпер;Дальнобойный плевок разъедает броню ядом;#88e040;rotter:1;spitter:1;;;28;0.9;5.5;;;14;;;;да
+bloodhowler;Вожак стаи;Усиливает соседей и больно кусает;#e04888;fanger:1;howler:1;;;26;1.2;3.2;;;;;30;25;нет
+cryodarter;Крио-стрелок;Очередь ледяных игл по одной цели;#60e8ff;jelly:1;darter:1;;;12;3.2;3.2;;45;;;;;нет
+sporecloud;Споровый улей;Отравляет и замедляет группу врагов;#70c878;rotter:1;swarmer:1;jelly:1;;16;1.3;3.5;;30;18;3;;;да
+railgunworm;Рельсовый червь;Сверхдальний пробивной выстрел;#c890ff;spitter:2;fanger:1;;;110;0.55;6.5;;;;;45;;да
+pyrohowler;Пламенный горн;Жжёт по области и разгоняет соседей;#ff9860;flamer:1;howler:1;darter:1;;32;1.5;3.2;1.1;;;;;20;нет
+venomfang;Ядовитый жнец;Критические укусы с тяжёлым токсином;#90e890;rotter:2;fanger:1;;;55;1.1;3.2;;;28;;35;;нет
+skybarrage;Зенитный рой;Перехватывает воздушные и наземные цели на большой дистанции;#ffd060;swarmer:2;spitter:1;;;42;1.4;5.0;;;;4;;;да
+bioreactor;Био-реактор;Массивный выброс плазмы и ускорение всей зоны;#ff50c8;flamer:2;howler:2;jelly:1;;120;1.0;4.0;1.6;40;;;;35;нет
+apexchimera;Химера Омега;Вершина безумной селекции: бьёт всех и вся;#ffffff;spitter:2;swarmer:2;fanger:2;rotter:1;180;1.8;5.5;1.2;40;45;4;35;25;да

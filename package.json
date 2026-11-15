@@ -4,6 +4,8 @@
   "description": "Tower defense: случайные самоцветы, лабиринт, слияние и рецепты",
   "scripts": {
     "dev": "vite --host",
+    "typecheck": "tsc --noEmit",
+    "sim": "node --import ./tools/register.mjs tools/sim.ts",
     "build": "tsc && vite build",
     "preview": "vite preview --host",
     "maze": "node --experimental-strip-types tools/maze-search.ts"

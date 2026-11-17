@@ -353,7 +353,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private get maze() {
-    return this.mazeIdx >= 0 ? D.MAZES[this.mazeIdx] : null;
+    return this.supportsMazeBlueprints() && this.mazeIdx >= 0 ? D.MAZES[this.mazeIdx] : null;
   }
 
   /** First stage of the blueprint that still has unbuilt cells (stages + 1 when done). */

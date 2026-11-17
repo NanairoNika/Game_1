@@ -46,6 +46,9 @@ const KILL_KINDS: R.KillKind[] = ['blade', 'fire', 'acid', 'tesla'];
 export class GameScene extends Phaser.Scene {
   private grid!: (Unit | null)[][];
   private level!: LevelDef;
+  private gridX!: number;
+  private gridY!: number;
+  private voidSet!: Set<number>;
   private path!: Pt[];
   private battle!: Battle;
   private phase!: Phase;
@@ -57,6 +60,7 @@ export class GameScene extends Phaser.Scene {
   private speed!: number;
   private fresh!: Unit[];
   private selected!: Unit | null;
+  private hovered: Unit | null = null;
   private crossing!: boolean;
   private partners!: Unit[];
   private bestiary!: Set<string>;
@@ -64,10 +68,12 @@ export class GameScene extends Phaser.Scene {
   private seenNotes!: Set<number>;
   private usedGadgets = false;
   private overlay: Phaser.GameObjects.GameObject[] = [];
+  private dossierObjs: Phaser.GameObjects.GameObject[] = [];
   private sealEnd = 0;
   /** chosen maze blueprint, -1 = none */
   private mazeIdx = -1;
   private mazeLabel!: Phaser.GameObjects.Text;
+  private mazeBg!: Phaser.GameObjects.Rectangle;
 
   private boardG!: Phaser.GameObjects.Graphics;
   private dynG!: Phaser.GameObjects.Graphics;
@@ -88,7 +94,6 @@ export class GameScene extends Phaser.Scene {
     this.meta = loadMeta();
     this.bestiary = loadBestiary();
     this.level = LEVELS.find((l) => l.id === this.meta.currentLevel) ?? LEVELS[0];
-    this.grid = Array.from({ length: D.ROWS }, () => Array<Unit | null>(D.COLS).fill(null));
     this.phase = 'build';
     this.wave = 1;
     this.maxStartLives = D.START_LIVES + (this.meta.upgrades.firewall ?? 0) * 4;
@@ -98,17 +103,23 @@ export class GameScene extends Phaser.Scene {
     this.speed = this.speed || 1;
     this.fresh = [];
     this.selected = null;
+    this.hovered = null;
     this.crossing = false;
     this.partners = [];
     this.buttons = [];
     this.overlay = [];
+    this.dossierObjs = [];
     this.seenNotes = new Set();
     this.usedGadgets = false;
 
     const resumed = this.restore();
-    if (!resumed) this.placeMapObstacles();
+    this.applyLevelGeometry();
+    if (!resumed) {
+      this.grid = Array.from({ length: this.level.rows }, () => Array<Unit | null>(this.level.cols).fill(null));
+      this.placeMapObstacles();
+    }
     this.path = this.computePath()!;
-    this.battle = new Battle(this.path, this.level.waypoints, this.level.hpMul);
+    this.battle = new Battle(this.path, this.level.waypoints, this.level.hpMul, Math.random, this.gridX, this.gridY);
     this.recalcAuras();
 
     this.boardG = this.add.graphics();
@@ -121,7 +132,7 @@ export class GameScene extends Phaser.Scene {
       fontStyle: 'bold',
       lineSpacing: 4,
     });
-    this.topButton(420, 'Лаб / Карты', 148, () => this.openLabModal());
+    this.topButton(420, 'Меню', 148, () => this.openMenuModal());
     this.topButton(565, 'Бестиарий', 130, () => this.openBestiary());
     this.createMazeButton();
     this.speedLabel = this.topButton(672, `x${this.speed}`, 72, () => {
@@ -143,6 +154,7 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => this.onTap(p));
+    this.input.on('pointermove', (p: Phaser.Input.Pointer) => this.onHover(p));
     (window as unknown as { __phase: () => Phase }).__phase = () => this.phase;
 
     this.refresh();
@@ -150,9 +162,19 @@ export class GameScene extends Phaser.Scene {
     else this.checkWaveNote();
   }
 
+  private applyLevelGeometry() {
+    this.gridX = (720 - this.level.cols * D.CELL_W) / 2;
+    this.gridY = D.GRID_Y + ((D.ROWS - this.level.rows) * D.CELL_H) / 2;
+    this.voidSet = new Set(this.level.voidCells.map((v) => v.y * this.level.cols + v.x));
+  }
+
+  private isVoid(x: number, y: number) {
+    return this.voidSet.has(y * this.level.cols + x);
+  }
+
   private placeMapObstacles() {
     for (const ob of this.level.obstacles) {
-      if (this.isWaypoint(ob.x, ob.y)) continue;
+      if (this.isWaypoint(ob.x, ob.y) || this.isVoid(ob.x, ob.y)) continue;
       this.grid[ob.y][ob.x] = { x: ob.x, y: ob.y, kind: 'sealed', pillar: true, cd: 0, auraMul: 1 };
     }
   }
@@ -191,16 +213,24 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ---------- maze blueprints ----------
+  private supportsMazeBlueprints() {
+    return this.level.cols === D.COLS && this.level.rows === D.ROWS && this.level.voidCells.length === 0;
+  }
+
   private createMazeButton() {
     this.mazeIdx = loadMazeChoice();
     if (this.mazeIdx >= D.MAZES.length) this.mazeIdx = -1;
-    const bg = this.add.rectangle(360, 120, 680, 44, 0x2a3324).setStrokeStyle(2, 0x8fa870).setInteractive();
+    this.mazeBg = this.add.rectangle(360, 120, 680, 44, 0x2a3324).setStrokeStyle(2, 0x8fa870).setInteractive();
     this.mazeLabel = this.add.text(360, 120, '', { fontSize: '22px', fontStyle: 'bold', color: '#f2ead0' }).setOrigin(0.5);
-    bg.on('pointerdown', () => this.openMazePicker());
+    this.mazeBg.on('pointerdown', () => this.openMazePicker());
   }
 
   private updateMazeButton() {
-    this.mazeLabel.setText(`Схема лабиринта: ${this.maze ? this.maze.name : 'нет'}  ▾`);
+    const show = this.supportsMazeBlueprints();
+    this.mazeBg.setVisible(show);
+    this.mazeLabel.setVisible(show);
+    if (show) this.mazeLabel.setText(`Схема лабиринта: ${this.maze ? this.maze.name : 'нет'}  ▾`);
+    else this.mazeLabel.setText('');
   }
 
   private closeOverlay() {
@@ -344,6 +374,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawMaze(g: Phaser.GameObjects.Graphics) {
+    if (!this.supportsMazeBlueprints()) return;
     const m = this.maze;
     if (!m) return;
     if (m.focus) {
@@ -410,6 +441,8 @@ export class GameScene extends Phaser.Scene {
     const savedLevel = LEVELS.find((l) => l.id === (s.levelId ?? 'doof')) ?? LEVELS[0];
     this.level = savedLevel;
     this.meta.currentLevel = savedLevel.id;
+    this.applyLevelGeometry();
+    this.grid = Array.from({ length: this.level.rows }, () => Array<Unit | null>(this.level.cols).fill(null));
     const fits =
       s.wave >= 1 &&
       s.wave <= D.TOTAL_WAVES &&
@@ -420,9 +453,10 @@ export class GameScene extends Phaser.Scene {
       s.cells.every(
         (c) =>
           c.x >= 0 &&
-          c.x < D.COLS &&
+          c.x < this.level.cols &&
           c.y >= 0 &&
-          c.y < D.ROWS &&
+          c.y < this.level.rows &&
+          !this.isVoid(c.x, c.y) &&
           !this.isWaypoint(c.x, c.y) &&
           ((c.kind === 'mon' && c.sp && D.BASE[c.sp] && (c.level ?? 99) <= D.MAX_LEVEL) ||
             (c.kind === 'hybrid' && D.HYBRIDS.some((h) => h.id === c.hybrid)) ||
@@ -445,7 +479,7 @@ export class GameScene extends Phaser.Scene {
       if (s.fresh.includes(i)) this.fresh.push(u);
     });
     if (!this.computePath()) {
-      this.grid = Array.from({ length: D.ROWS }, () => Array<Unit | null>(D.COLS).fill(null));
+      this.grid = Array.from({ length: this.level.rows }, () => Array<Unit | null>(this.level.cols).fill(null));
       this.fresh = [];
       saveRun(null);
       return false;
@@ -471,11 +505,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private toPx(fx: number, fy: number) {
-    return toPx(fx, fy);
+    return toPx(fx, fy, this.gridX, this.gridY);
   }
 
   private origin(p: Pt) {
-    return { x: D.GRID_X + p.x * D.CELL_W, y: D.GRID_Y + p.y * D.CELL_H };
+    return { x: this.gridX + p.x * D.CELL_W, y: this.gridY + p.y * D.CELL_H };
   }
 
   private isWaypoint(x: number, y: number) {
@@ -483,14 +517,19 @@ export class GameScene extends Phaser.Scene {
   }
 
   private computePath() {
-    return fullPath(D.COLS, D.ROWS, (x, y) => this.grid[y][x] !== null, this.level.waypoints);
+    return fullPath(
+      this.level.cols,
+      this.level.rows,
+      (x, y) => this.isVoid(x, y) || this.grid[y][x] !== null,
+      this.level.waypoints,
+    );
   }
 
   /** Whether at least one empty cell on the board can still be placed without blocking the path. */
   private hasValidBuildCell(): boolean {
-    for (let y = 0; y < D.ROWS; y++) {
-      for (let x = 0; x < D.COLS; x++) {
-        if (this.grid[y][x] || this.isWaypoint(x, y)) continue;
+    for (let y = 0; y < this.level.rows; y++) {
+      for (let x = 0; x < this.level.cols; x++) {
+        if (this.isVoid(x, y) || this.grid[y][x] || this.isWaypoint(x, y)) continue;
         this.grid[y][x] = { x, y, kind: 'sealed', cd: 0, auraMul: 1 };
         const ok = this.computePath() !== null;
         this.grid[y][x] = null;
@@ -558,18 +597,48 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ---------- input ----------
-  private onTap(p: Phaser.Input.Pointer) {
-    if (this.overlay.length || this.phase === 'sealing') return;
-    const cx = Math.floor((p.x - D.GRID_X) / D.CELL_W);
-    let cy = Math.floor((p.y - D.GRID_Y) / D.CELL_H);
+  private cellAtPointer(p: Phaser.Input.Pointer): { cx: number; cy: number; u: Unit | null } | null {
+    const cx = Math.floor((p.x - this.gridX) / D.CELL_W);
+    let cy = Math.floor((p.y - this.gridY) / D.CELL_H);
     // Cages rise above their cell. Outside the build phase, a tap on an empty cell
     // that is visually covered by the cage below selects that cage.
-    if (this.phase !== 'build' && cx >= 0 && cx < D.COLS && cy >= 0 && cy < D.ROWS - 1 && !this.grid[cy][cx]) {
-      const coveredFrom = D.GRID_Y + (cy + 1) * D.CELL_H - D.OBJ_H;
-      if (p.y >= coveredFrom && this.grid[cy + 1][cx]) cy++;
+    if (
+      this.phase !== 'build' &&
+      cx >= 0 &&
+      cx < this.level.cols &&
+      cy >= 0 &&
+      cy < this.level.rows - 1 &&
+      !this.isVoid(cx, cy) &&
+      !this.grid[cy][cx]
+    ) {
+      const coveredFrom = this.gridY + (cy + 1) * D.CELL_H - D.OBJ_H;
+      if (p.y >= coveredFrom && !this.isVoid(cx, cy + 1) && this.grid[cy + 1][cx]) cy++;
     }
-    if (cx < 0 || cy < 0 || cx >= D.COLS || cy >= D.ROWS) return;
-    const u = this.grid[cy][cx];
+    if (cx < 0 || cy < 0 || cx >= this.level.cols || cy >= this.level.rows || this.isVoid(cx, cy)) return null;
+    return { cx, cy, u: this.grid[cy][cx] };
+  }
+
+  private onHover(p: Phaser.Input.Pointer) {
+    if (this.overlay.length || this.phase === 'sealing') {
+      if (this.hovered) {
+        this.hovered = null;
+        this.updateDossier();
+      }
+      return;
+    }
+    const hit = this.cellAtPointer(p);
+    const next = hit && hit.u && hit.u.kind !== 'sealed' ? hit.u : null;
+    if (next !== this.hovered) {
+      this.hovered = next;
+      this.updateDossier();
+    }
+  }
+
+  private onTap(p: Phaser.Input.Pointer) {
+    if (this.overlay.length || this.phase === 'sealing') return;
+    const hit = this.cellAtPointer(p);
+    if (!hit) return;
+    const { cx, cy, u } = hit;
 
     if (this.phase === 'build' && !u) {
       this.tryPlace(cx, cy);
@@ -908,6 +977,98 @@ export class GameScene extends Phaser.Scene {
     return `${s.name}. ${s.desc}\n${parts.join(' · ')}`;
   }
 
+  private clearDossier() {
+    for (const o of this.dossierObjs) o.destroy();
+    this.dossierObjs = [];
+  }
+
+  /** Renders a structured monster dossier card (portrait + stat table) on hover or selection. */
+  private updateDossier() {
+    this.clearDossier();
+    if (this.crossing || this.phase === 'sealing' || this.phase === 'over' || this.phase === 'win') {
+      this.info.setVisible(true);
+      return;
+    }
+    const target = this.hovered ?? (this.selected && this.selected.kind !== 'sealed' ? this.selected : null);
+    if (!target || target.kind === 'sealed') {
+      this.info.setVisible(true);
+      return;
+    }
+    this.info.setVisible(false);
+    const s = this.stats(target);
+    const isHyb = target.kind === 'hybrid';
+    const topY = PANEL_Y + 46;
+    const cardH = 148;
+    const objs: Phaser.GameObjects.GameObject[] = [];
+
+    // Dossier background card
+    const bg = this.add.rectangle(360, topY + cardH / 2, 684, cardH, 0x151e18, 0.96).setStrokeStyle(2, s.color);
+    objs.push(bg);
+
+    // Portrait frame on the left
+    const px = 72;
+    const py = topY + cardH / 2;
+    const pBox = this.add.rectangle(px, py, 86, 118, 0x222c24).setStrokeStyle(2, isHyb ? 0xd9b13b : 0x7c868e);
+    const pg = this.add.graphics();
+    R.cageFloor(pg, px - D.CELL_W / 2, py - D.CELL_H / 2 + 10, s.color);
+    R.creature(pg, px, py + 24, isHyb ? 15 : this.monsterRadius(target.level ?? 0) + 3, s.color, { spikes: isHyb });
+    const roleTag = this.add
+      .text(px, topY + 24, s.antiAir ? 'ПВО ✈' : isHyb ? 'ГИБРИД' : `УР. ${(target.level ?? 0) + 1}`, {
+        fontSize: '12px',
+        fontStyle: 'bold',
+        color: s.antiAir ? '#70e8ff' : isHyb ? '#ffd84a' : '#d8e0d0',
+        backgroundColor: '#0c120e',
+        padding: { x: 4, y: 2 },
+      })
+      .setOrigin(0.5);
+    objs.push(pBox, pg, roleTag);
+
+    // Header: Name + short description
+    const head = this.add.text(126, topY + 10, `${s.name}  —  ${s.desc}`, {
+      fontSize: '17px',
+      fontStyle: 'bold',
+      color: '#ffe9a8',
+      wordWrap: { width: 560 },
+    });
+    objs.push(head);
+
+    // Structured stat cells (2 rows x 4 columns)
+    const cells: { k: string; v: string; col?: string }[] = [
+      { k: 'УРОН', v: `${Math.round(s.dmg)}`, col: '#ff9a7a' },
+      { k: 'СКОРОСТЬ', v: `${(s.rate * target.auraMul).toFixed(1)}/с`, col: '#a8f0ff' },
+      { k: 'ДАЛЬНОСТЬ', v: `${s.range}`, col: '#d8e8c8' },
+      { k: 'ВОЗДУХ', v: s.antiAir ? 'ДА (ПВО)' : 'НЕТ', col: s.antiAir ? '#70e8ff' : '#7a847e' },
+    ];
+    if (s.targets) cells.push({ k: 'ЦЕЛИ', v: `${s.targets}`, col: '#ffd84a' });
+    if (s.splash) cells.push({ k: 'ОБЛАСТЬ', v: `${s.splash}`, col: '#ff8a50' });
+    if (s.slow) cells.push({ k: 'ЗАМЕДЛ.', v: `${Math.round(s.slow * 100)}%`, col: '#70c8ff' });
+    if (s.poison) cells.push({ k: 'ЯД', v: `${Math.round(s.poison)}/с`, col: '#60e878' });
+    if (s.crit) cells.push({ k: 'КРИТ', v: `${Math.round(s.crit * 100)}%`, col: '#ffe066' });
+    if (s.aura) cells.push({ k: 'АУРА', v: `+${Math.round(s.aura * 100)}%`, col: '#ff90d8' });
+
+    const cols = 4;
+    const cellW = 136;
+    const cellH = 44;
+    const startX = 126;
+    const startY = topY + 42;
+    cells.slice(0, 8).forEach((c, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const cx = startX + col * (cellW + 6);
+      const cy = startY + row * (cellH + 6);
+      const box = this.add.rectangle(cx + cellW / 2, cy + cellH / 2, cellW, cellH, 0x1e2b23).setStrokeStyle(1, 0x455a4c);
+      const kt = this.add.text(cx + 6, cy + 4, c.k, { fontSize: '11px', color: '#9ab0a0', fontStyle: 'bold' });
+      const vt = this.add.text(cx + 6, cy + 20, c.v, {
+        fontSize: '16px',
+        color: c.col ?? '#ffffff',
+        fontStyle: 'bold',
+      });
+      objs.push(box, kt, vt);
+    });
+
+    this.dossierObjs = objs;
+  }
+
   private refresh() {
     this.flashTimer?.remove();
     this.flashTimer = undefined;
@@ -1045,7 +1206,7 @@ export class GameScene extends Phaser.Scene {
         this.msg.setText(`Суперкомпьютер взломан на волне ${this.wave}!`);
         info = `Чертежи украдены. Открыто гибридов: ${this.bestiary.size}/${D.HYBRIDS.length}. Бестиарий и Лаборатория сохранены.`;
         specs.push({ label: 'Заново', color: 0x8a2a2a, cb: () => this.newGame() });
-        specs.push({ label: 'Выбор карты', color: 0x3a5a6a, cb: () => this.openLabModal() });
+        specs.push({ label: 'Карта', color: 0x3a5a6a, cb: () => this.openMapModal() });
         break;
       case 'win': {
         const stars = this.lives >= 18 ? 3 : this.lives >= 10 ? 2 : 1;
@@ -1053,7 +1214,7 @@ export class GameScene extends Phaser.Scene {
         this.msg.setText(`Победа! Лаборатория защищена (${'★'.repeat(stars)}${'☆'.repeat(3 - stars)})`);
         info = `Осталось жизней мейнфрейма: ${this.lives}${badge}`;
         specs.push({ label: 'Сыграть ещё', color: 0x4c6a2e, cb: () => this.newGame() });
-        specs.push({ label: 'Следующая карта', color: 0x3a5a6a, cb: () => this.openLabModal() });
+        specs.push({ label: 'Карта', color: 0x3a5a6a, cb: () => this.openMapModal() });
         break;
       }
     }
@@ -1062,11 +1223,12 @@ export class GameScene extends Phaser.Scene {
     this.layoutButtons(specs);
     this.updateHud();
     this.updateMazeButton();
+    this.updateDossier();
     this.drawBoard();
     this.persist();
   }
 
-  // ---------- Modals: Scientist Notes, Lab & Maps, Bestiary ----------
+  // ---------- Modals: Scientist Notes, Menu, World Map, Lab Upgrades, Settings ----------
   private openNoteModal(title: string, body: string) {
     if (this.overlay.length) return;
     const bg = this.add.rectangle(360, 640, 720, 1280, 0x080c0a, 0.88).setInteractive().setDepth(100);
@@ -1105,99 +1267,229 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private openLabModal() {
+  private isLevelUnlocked(idx: number): boolean {
+    if (idx === 0) return true;
+    return (this.meta.stars[LEVELS[idx - 1].id] ?? 0) > 0;
+  }
+
+  private openMenuModal() {
+    if (this.overlay.length) return;
+    const bg = this.add.rectangle(360, 640, 720, 1280, 0x090e0b, 0.92).setInteractive().setDepth(100);
+    const panel = this.add.rectangle(360, 620, 560, 760, 0x16201a).setStrokeStyle(3, 0x8fa870).setDepth(101);
+    const title = this.add
+      .text(360, 295, 'МЕНЮ ЛАБОРАТОРИИ', { fontSize: '30px', fontStyle: 'bold', color: '#ffe9a8' })
+      .setOrigin(0.5)
+      .setDepth(102);
+    const sub = this.add
+      .text(360, 338, `${this.level.title} · ★${this.availableStars()}/${this.totalStars()} · 💎${this.meta.cores}`, {
+        fontSize: '18px',
+        color: '#b8c8b8',
+      })
+      .setOrigin(0.5)
+      .setDepth(102);
+    const items: Phaser.GameObjects.GameObject[] = [bg, panel, title, sub];
+
+    const addBtn = (y: number, label: string, color: number, cb: () => void) => {
+      const b = this.add.rectangle(360, y, 460, 82, color).setStrokeStyle(2, 0xf0e0a0).setInteractive().setDepth(102);
+      const t = this.add.text(360, y, label, { fontSize: '25px', fontStyle: 'bold', color: '#fff' }).setOrigin(0.5).setDepth(103);
+      b.on('pointerdown', cb);
+      items.push(b, t);
+    };
+
+    const closeAll = () => {
+      for (const o of this.overlay) o.destroy();
+      this.overlay = [];
+    };
+
+    addBtn(425, 'Продолжить забег', 0x3b6e4c, closeAll);
+    addBtn(530, 'Карта лабораторий', 0x2c5268, () => {
+      closeAll();
+      this.openMapModal();
+    });
+    addBtn(635, `Улучшения лаборатории (★${this.availableStars()})`, 0x5c4a22, () => {
+      closeAll();
+      this.openUpgradesModal();
+    });
+    addBtn(740, 'Настройки', 0x3b444e, () => {
+      closeAll();
+      this.openSettingsModal();
+    });
+    addBtn(865, 'Выйти из забега на карту', 0x722a2a, () => {
+      saveRun(null);
+      closeAll();
+      this.openMapModal();
+    });
+
+    this.overlay = items;
+  }
+
+  private openMapModal() {
+    if (this.overlay.length) return;
+    const bg = this.add.rectangle(360, 640, 720, 1280, 0x0a1014, 0.98).setInteractive().setDepth(100);
+    const items: Phaser.GameObjects.GameObject[] = [bg];
+
+    const header = this.add
+      .text(360, 42, 'КАРТА ЛАБОРАТОРИЙ', { fontSize: '30px', fontStyle: 'bold', color: '#ffe9a8' })
+      .setOrigin(0.5)
+      .setDepth(101);
+    const sub = this.add
+      .text(360, 80, `Пройди уровень на ★+, чтобы открыть следующую арену · ★${this.totalStars()}/${LEVELS.length * 3}`, {
+        fontSize: '18px',
+        color: '#a8c0c8',
+      })
+      .setOrigin(0.5)
+      .setDepth(101);
+    items.push(header, sub);
+
+    // Draw subtle grid & connecting route lines between nodes
+    const mapG = this.add.graphics().setDepth(101);
+    mapG.lineStyle(1, 0x1e2e36, 0.45);
+    for (let x = 40; x < 720; x += 60) mapG.lineBetween(x, 120, x, 1130);
+    for (let y = 120; y < 1130; y += 60) mapG.lineBetween(20, y, 700, y);
+
+    for (let i = 0; i < LEVELS.length - 1; i++) {
+      const a = LEVELS[i].mapPos;
+      const b = LEVELS[i + 1].mapPos;
+      const unlocked = this.isLevelUnlocked(i + 1);
+      mapG.lineStyle(6, unlocked ? 0x58b888 : 0x36424a, unlocked ? 0.85 : 0.45);
+      mapG.lineBetween(a.x, a.y, b.x, b.y);
+    }
+    items.push(mapG);
+
+    // Level nodes on the map
+    LEVELS.forEach((lvl, idx) => {
+      const unlocked = this.isLevelUnlocked(idx);
+      const isCur = lvl.id === this.level.id;
+      const stars = this.meta.stars[lvl.id] ?? 0;
+      const hc = this.meta.hardcoreCleared.includes(lvl.id) ? ' 💀' : '';
+      const { x, y } = lvl.mapPos;
+
+      const node = this.add
+        .circle(x, y, 36, !unlocked ? 0x262d33 : stars > 0 ? 0x2d6844 : 0x2d5070)
+        .setStrokeStyle(4, isCur ? 0xffe066 : unlocked ? 0x90e8b8 : 0x526068)
+        .setDepth(102);
+      if (unlocked) node.setInteractive();
+
+      const numTxt = this.add
+        .text(x, y, unlocked ? String(idx + 1) : '🔒', {
+          fontSize: unlocked ? '28px' : '24px',
+          fontStyle: 'bold',
+          color: unlocked ? '#ffffff' : '#9aa8b0',
+        })
+        .setOrigin(0.5)
+        .setDepth(103);
+
+      const labelBg = this.add
+        .rectangle(x, y + 62, 240, 56, 0x121b20, 0.92)
+        .setStrokeStyle(1.5, isCur ? 0xffe066 : unlocked ? 0x4c6878 : 0x2a343c)
+        .setDepth(102);
+      const starStr = unlocked ? `${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}${hc}` : 'Закрыто';
+      const titleTxt = this.add
+        .text(x, y + 51, lvl.title.replace(/^\d+\.\s*/, ''), {
+          fontSize: '16px',
+          fontStyle: 'bold',
+          color: unlocked ? '#f4eed8' : '#788890',
+        })
+        .setOrigin(0.5)
+        .setDepth(103);
+      const metaTxt = this.add
+        .text(x, y + 73, `${lvl.cols}×${lvl.rows} · ХП ×${lvl.hpMul} · ${starStr}`, {
+          fontSize: '14px',
+          color: unlocked ? '#ffd84a' : '#64727a',
+        })
+        .setOrigin(0.5)
+        .setDepth(103);
+
+      if (unlocked) {
+        const launch = () => {
+          closeAll();
+          this.newGame(lvl.id);
+        };
+        node.on('pointerdown', launch);
+        labelBg.setInteractive().on('pointerdown', launch);
+      }
+      items.push(node, numTxt, labelBg, titleTxt, metaTxt);
+    });
+
+    const backBtn = this.add
+      .rectangle(200, 1205, 320, 76, 0x4a4a4a)
+      .setStrokeStyle(3, 0xf0e0a0)
+      .setInteractive()
+      .setDepth(102);
+    const backT = this.add
+      .text(200, 1205, 'В меню', { fontSize: '24px', fontStyle: 'bold', color: '#fff' })
+      .setOrigin(0.5)
+      .setDepth(103);
+    const closeBtn = this.add
+      .rectangle(535, 1205, 310, 76, 0x3b6e4c)
+      .setStrokeStyle(3, 0xf0e0a0)
+      .setInteractive()
+      .setDepth(102);
+    const closeT = this.add
+      .text(535, 1205, 'Вернуться в игру', { fontSize: '24px', fontStyle: 'bold', color: '#fff' })
+      .setOrigin(0.5)
+      .setDepth(103);
+    items.push(backBtn, backT, closeBtn, closeT);
+
+    this.overlay = items;
+    const closeAll = () => {
+      for (const o of this.overlay) o.destroy();
+      this.overlay = [];
+    };
+    backBtn.on('pointerdown', () => {
+      closeAll();
+      this.openMenuModal();
+    });
+    closeBtn.on('pointerdown', closeAll);
+  }
+
+  private openUpgradesModal() {
     if (this.overlay.length) return;
     const bg = this.add.rectangle(360, 640, 720, 1280, 0x0b0f0e, 0.97).setInteractive().setDepth(100);
     const items: Phaser.GameObjects.GameObject[] = [bg];
 
     const header = this.add
-      .text(
-        360,
-        34,
-        `ЛАБОРАТОРИИ ЗЛОДЕЕВ · ★${this.availableStars()}/${this.totalStars()} · 💎${this.meta.cores}`,
-        { fontSize: '25px', fontStyle: 'bold', color: '#ffe9a8' },
-      )
+      .text(360, 46, `УЛУЧШЕНИЯ ЛАБОРАТОРИИ · ★${this.availableStars()} доступно`, {
+        fontSize: '26px',
+        fontStyle: 'bold',
+        color: '#ffe9a8',
+      })
       .setOrigin(0.5)
       .setDepth(101);
-    items.push(header);
-
-    // 6 Scientist Villain Maps
-    LEVELS.forEach((lvl, idx) => {
-      const y = 92 + idx * 96;
-      const isCur = lvl.id === this.level.id;
-      const stars = this.meta.stars[lvl.id] ?? 0;
-      const hc = this.meta.hardcoreCleared.includes(lvl.id) ? ' 💀' : '';
-      const starStr = `${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}${hc}`;
-      const rect = this.add
-        .rectangle(360, y + 32, 660, 84, isCur ? 0x2c4834 : 0x1c2622)
-        .setStrokeStyle(2, isCur ? 0xffe066 : 0x5c7464)
-        .setInteractive()
-        .setDepth(101);
-      const t1 = this.add
-        .text(46, y + 10, `${lvl.title}  [${starStr}]`, {
-          fontSize: '21px',
-          fontStyle: 'bold',
-          color: isCur ? '#ffe066' : '#ffffff',
-        })
-        .setDepth(102);
-      const t2 = this.add
-        .text(46, y + 38, `${lvl.scientist} — ${lvl.subtitle} (ХП врагов ×${lvl.hpMul})`, {
-          fontSize: '16px',
-          color: '#b8c8b8',
-          wordWrap: { width: 520 },
-        })
-        .setDepth(102);
-      const playT = this.add
-        .text(650, y + 32, isCur ? 'ИГРАЕМ' : 'СТАРТ', {
-          fontSize: '18px',
-          fontStyle: 'bold',
-          color: isCur ? '#90ff98' : '#70e8ff',
-        })
-        .setOrigin(1, 0.5)
-        .setDepth(102);
-      rect.on('pointerdown', () => {
-        closeAll();
-        if (lvl.id !== this.level.id || this.phase === 'over' || this.phase === 'win') {
-          this.newGame(lvl.id);
-        }
-      });
-      items.push(rect, t1, t2, playT);
-    });
-
-    // Meta-upgrades section
-    const upTitle = this.add
-      .text(30, 674, `ПРОКАЧКА ЛАБОРАТОРИИ (свободно ★${this.availableStars()})`, {
-        fontSize: '22px',
-        fontStyle: 'bold',
-        color: '#70e8ff',
+    const sub = this.add
+      .text(360, 84, 'Звёзды даются за прохождение карт. Улучшения действуют на всех аренах.', {
+        fontSize: '17px',
+        color: '#a8b8c0',
       })
+      .setOrigin(0.5)
       .setDepth(101);
-    items.push(upTitle);
+    items.push(header, sub);
 
     LAB_UPGRADES.forEach((up, idx) => {
-      const y = 712 + idx * 86;
+      const y = 140 + idx * 140;
       const curLvl = this.meta.upgrades[up.id] ?? 0;
       const nextCost = curLvl < up.maxLevel ? up.starCost[curLvl] : 0;
       const canBuy = curLvl < up.maxLevel && this.availableStars() >= nextCost;
       const box = this.add
-        .rectangle(360, y + 30, 660, 74, 0x1a2228)
+        .rectangle(360, y + 52, 660, 118, 0x1a2228)
         .setStrokeStyle(2, canBuy ? 0x70e8ff : 0x3a4852)
         .setInteractive()
         .setDepth(101);
       const label = this.add
-        .text(46, y + 8, `${up.name} (Ур. ${curLvl}/${up.maxLevel})`, {
-          fontSize: '20px',
+        .text(48, y + 18, `${up.name} (Ур. ${curLvl}/${up.maxLevel})`, {
+          fontSize: '23px',
           fontStyle: 'bold',
           color: '#f0ead8',
         })
         .setDepth(102);
       const desc = this.add
-        .text(46, y + 36, up.desc, { fontSize: '16px', color: '#a8b8c0' })
+        .text(48, y + 54, up.desc, { fontSize: '18px', color: '#a8b8c0', wordWrap: { width: 440 } })
         .setDepth(102);
       const buyLabel = this.add
-        .text(650, y + 30, curLvl >= up.maxLevel ? 'МАКС' : `Купить (${nextCost}★)`, {
-          fontSize: '18px',
+        .text(665, y + 52, curLvl >= up.maxLevel ? 'МАКС' : `Купить\n(${nextCost}★)`, {
+          fontSize: '20px',
           fontStyle: 'bold',
+          align: 'right',
           color: curLvl >= up.maxLevel ? '#888' : canBuy ? '#ffe066' : '#777',
         })
         .setOrigin(1, 0.5)
@@ -1209,23 +1501,58 @@ export class GameScene extends Phaser.Scene {
         this.maxStartLives = D.START_LIVES + (this.meta.upgrades.firewall ?? 0) * 4;
         this.recalcAuras();
         closeAll();
-        this.openLabModal();
+        this.openUpgradesModal();
       });
       items.push(box, label, desc, buyLabel);
     });
 
-    // Hardcore toggle button
+    const back = this.add
+      .rectangle(360, 1205, 420, 78, 0x4c6a2e)
+      .setStrokeStyle(3, 0xf0e0a0)
+      .setInteractive()
+      .setDepth(101);
+    const backT = this.add
+      .text(360, 1205, 'Назад в меню', { fontSize: '25px', fontStyle: 'bold', color: '#fff' })
+      .setOrigin(0.5)
+      .setDepth(102);
+    items.push(back, backT);
+
+    this.overlay = items;
+    const closeAll = () => {
+      for (const o of this.overlay) o.destroy();
+      this.overlay = [];
+    };
+    back.on('pointerdown', () => {
+      closeAll();
+      this.openMenuModal();
+    });
+  }
+
+  private openSettingsModal() {
+    if (this.overlay.length) return;
+    const bg = this.add.rectangle(360, 640, 720, 1280, 0x0b0f0e, 0.97).setInteractive().setDepth(100);
+    const title = this.add
+      .text(360, 60, 'НАСТРОЙКИ', { fontSize: '30px', fontStyle: 'bold', color: '#ffe9a8' })
+      .setOrigin(0.5)
+      .setDepth(101);
+    const items: Phaser.GameObjects.GameObject[] = [bg, title];
+
+    const closeAll = () => {
+      for (const o of this.overlay) o.destroy();
+      this.overlay = [];
+    };
+
     const hcBtn = this.add
-      .rectangle(360, 1098, 660, 64, this.meta.hardcore ? 0x6a2222 : 0x263228)
+      .rectangle(360, 220, 640, 96, this.meta.hardcore ? 0x6a2222 : 0x243028)
       .setStrokeStyle(2, 0xf0e0a0)
       .setInteractive()
       .setDepth(101);
     const hcTxt = this.add
       .text(
         360,
-        1098,
-        `Режим «Хардкор без гаджетов»: ${this.meta.hardcore ? 'ВКЛЮЧЁН 💀' : 'ВЫКЛЮЧЕН'} (нажми для переключения)`,
-        { fontSize: '19px', fontStyle: 'bold', color: '#fff' },
+        220,
+        `Режим «Хардкор без гаджетов»: ${this.meta.hardcore ? 'ВКЛЮЧЁН 💀' : 'ВЫКЛЮЧЕН'}\n(отключает платные кнопки за 💎 в бою)`,
+        { fontSize: '20px', fontStyle: 'bold', color: '#fff', align: 'center' },
       )
       .setOrigin(0.5)
       .setDepth(102);
@@ -1234,41 +1561,55 @@ export class GameScene extends Phaser.Scene {
       saveMeta(this.meta);
       closeAll();
       this.refresh();
-      this.openLabModal();
+      this.openSettingsModal();
     });
-    items.push(hcBtn, hcTxt);
 
-    // Bottom buttons: Close & Reset current run
-    const close = this.add
-      .rectangle(200, 1205, 320, 76, 0x4c6a2e)
-      .setStrokeStyle(3, 0xf0e0a0)
+    const restartBtn = this.add
+      .rectangle(360, 355, 640, 84, 0x5c3a22)
+      .setStrokeStyle(2, 0xf0e0a0)
       .setInteractive()
       .setDepth(101);
-    const closeT = this.add
-      .text(200, 1205, 'Вернуться в бой', { fontSize: '24px', fontStyle: 'bold', color: '#fff' })
+    const restartTxt = this.add
+      .text(360, 355, 'Перезапустить текущую арену с 1-й волны', { fontSize: '22px', fontStyle: 'bold', color: '#fff' })
       .setOrigin(0.5)
       .setDepth(102);
-    const restart = this.add
-      .rectangle(535, 1205, 310, 76, 0x6a2a2a)
-      .setStrokeStyle(3, 0xf0e0a0)
-      .setInteractive()
-      .setDepth(101);
-    const restartT = this.add
-      .text(535, 1205, 'Перезапустить карту', { fontSize: '23px', fontStyle: 'bold', color: '#fff' })
-      .setOrigin(0.5)
-      .setDepth(102);
-    items.push(close, closeT, restart, restartT);
-
-    this.overlay = items;
-    const closeAll = () => {
-      for (const o of this.overlay) o.destroy();
-      this.overlay = [];
-    };
-    close.on('pointerdown', closeAll);
-    restart.on('pointerdown', () => {
+    restartBtn.on('pointerdown', () => {
       closeAll();
       this.newGame();
     });
+
+    const resetAllBtn = this.add
+      .rectangle(360, 475, 640, 84, 0x6a2020)
+      .setStrokeStyle(2, 0xf0a0a0)
+      .setInteractive()
+      .setDepth(101);
+    const resetAllTxt = this.add
+      .text(360, 475, 'Сбросить прогресс кампании (звёзды и карты)', { fontSize: '21px', fontStyle: 'bold', color: '#ffd0d0' })
+      .setOrigin(0.5)
+      .setDepth(102);
+    resetAllBtn.on('pointerdown', () => {
+      this.meta = { stars: {}, hardcoreCleared: [], cores: 3, upgrades: {}, currentLevel: LEVELS[0].id, hardcore: false };
+      saveMeta(this.meta);
+      closeAll();
+      this.newGame(LEVELS[0].id);
+    });
+
+    const back = this.add
+      .rectangle(360, 1205, 420, 78, 0x4c6a2e)
+      .setStrokeStyle(3, 0xf0e0a0)
+      .setInteractive()
+      .setDepth(101);
+    const backT = this.add
+      .text(360, 1205, 'Назад в меню', { fontSize: '25px', fontStyle: 'bold', color: '#fff' })
+      .setOrigin(0.5)
+      .setDepth(102);
+    back.on('pointerdown', () => {
+      closeAll();
+      this.openMenuModal();
+    });
+
+    items.push(hcBtn, hcTxt, restartBtn, restartTxt, resetAllBtn, resetAllTxt, back, backT);
+    this.overlay = items;
   }
 
   private openBestiary() {
@@ -1362,14 +1703,21 @@ export class GameScene extends Phaser.Scene {
   private drawBoard() {
     const g = this.boardG;
     g.clear();
-    const W = D.COLS * D.CELL_W;
-    const H = D.ROWS * D.CELL_H;
-    g.fillStyle(0x16221a).fillRect(D.GRID_X - 6, D.GRID_Y - 6, W + 12, H + 12);
-    for (let y = 0; y < D.ROWS; y++)
-      for (let x = 0; x < D.COLS; x++) {
-        g.fillStyle((x + y) % 2 ? 0x26342c : 0x223028);
-        g.fillRect(D.GRID_X + x * D.CELL_W, D.GRID_Y + y * D.CELL_H, D.CELL_W, D.CELL_H);
+    // Draw dark arena border behind each playable cell so custom arena shapes stand out
+    g.fillStyle(0x111a14);
+    for (let y = 0; y < this.level.rows; y++) {
+      for (let x = 0; x < this.level.cols; x++) {
+        if (this.isVoid(x, y)) continue;
+        g.fillRect(this.gridX + x * D.CELL_W - 5, this.gridY + y * D.CELL_H - 5, D.CELL_W + 10, D.CELL_H + 10);
       }
+    }
+    for (let y = 0; y < this.level.rows; y++) {
+      for (let x = 0; x < this.level.cols; x++) {
+        if (this.isVoid(x, y)) continue;
+        g.fillStyle((x + y) % 2 ? 0x26342c : 0x223028);
+        g.fillRect(this.gridX + x * D.CELL_W, this.gridY + y * D.CELL_H, D.CELL_W, D.CELL_H);
+      }
+    }
 
     // Ground data cable path between terminals
     g.lineStyle(12, 0x3b685c, 0.55);
@@ -1504,9 +1852,10 @@ export class GameScene extends Phaser.Scene {
       g.fillStyle(e.def.flying ? 0x70e8ff : 0x7cff6a).fillRect(p.x - w / 2, y, (w * Math.max(0, e.hp)) / e.maxHp, 5);
     }
 
-    if (this.selected && this.selected.kind !== 'sealed') {
-      const c = this.center(this.selected);
-      const s = this.stats(this.selected);
+    const focusUnit = this.hovered ?? (this.selected && this.selected.kind !== 'sealed' ? this.selected : null);
+    if (focusUnit && focusUnit.kind !== 'sealed') {
+      const c = this.center(focusUnit);
+      const s = this.stats(focusUnit);
       const rx = s.range * D.CELL_W;
       const ry = s.range * D.CELL_H;
       g.fillStyle(0xffffff, 0.07).fillEllipse(c.x, c.y, rx * 2, ry * 2);

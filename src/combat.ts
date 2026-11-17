@@ -42,8 +42,8 @@ const SHOT_SPEED = 750;
 export const GROUND_HIT_H = 12;
 export const AIR_HIT_H = 22;
 
-export function toPx(fx: number, fy: number) {
-  return { x: D.GRID_X + fx * D.CELL_W + D.CELL_W / 2, y: D.GRID_Y + fy * D.CELL_H + D.CELL_H / 2 };
+export function toPx(fx: number, fy: number, gridX = D.GRID_X, gridY = D.GRID_Y) {
+  return { x: gridX + fx * D.CELL_W + D.CELL_W / 2, y: gridY + fy * D.CELL_H + D.CELL_H / 2 };
 }
 
 export class Battle {
@@ -58,13 +58,24 @@ export class Battle {
   path: Pt[];
   airPath: Pt[];
   hpMul: number;
+  gridX: number;
+  gridY: number;
   private rng: () => number;
 
-  constructor(path: Pt[], airPath: Pt[], hpMul = 1, rng: () => number = Math.random) {
+  constructor(
+    path: Pt[],
+    airPath: Pt[],
+    hpMul = 1,
+    rng: () => number = Math.random,
+    gridX = D.GRID_X,
+    gridY = D.GRID_Y,
+  ) {
     this.path = path;
     this.airPath = airPath;
     this.hpMul = hpMul;
     this.rng = rng;
+    this.gridX = gridX;
+    this.gridY = gridY;
   }
 
   startWave(groups: D.SpawnGroup[]) {
@@ -146,7 +157,7 @@ export class Battle {
         .sort((a, b) => b.dist - a.dist)
         .slice(0, s.targets ?? 1);
       if (!targets.length) continue;
-      const c = toPx(u.x, u.y);
+      const c = toPx(u.x, u.y, this.gridX, this.gridY);
       for (const e of targets)
         this.shots.push({ x: c.x, y: c.y - D.OBJ_H, target: e, tx: e.fx, ty: e.fy, stats: s, src: u });
       u.cd = 1 / (s.rate * u.auraMul);
@@ -160,7 +171,7 @@ export class Battle {
       } else if (!sh.stats.splash) {
         return false;
       }
-      const tp = toPx(sh.tx, sh.ty);
+      const tp = toPx(sh.tx, sh.ty, this.gridX, this.gridY);
       const dx = tp.x - sh.x;
       const dy = tp.y - (sh.target.def.flying ? AIR_HIT_H : GROUND_HIT_H) - sh.y;
       const d = Math.hypot(dx, dy);

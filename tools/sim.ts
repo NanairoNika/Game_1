@@ -70,11 +70,18 @@ function unitName(c: Rules.Creature) {
 }
 
 function playRun(strategy: Strategy): RunResult {
-  const grid: (Cell | null)[][] = Array.from({ length: D.ROWS }, () => Array<Cell | null>(D.COLS).fill(null));
+  const cols = level!.cols;
+  const rows = level!.rows;
+  const gridX = (720 - cols * D.CELL_W) / 2;
+  const gridY = D.GRID_Y + ((D.ROWS - rows) * D.CELL_H) / 2;
+  const voidSet = new Set(level!.voidCells.map((v) => v.y * cols + v.x));
+  const grid: (Cell | null)[][] = Array.from({ length: rows }, () => Array<Cell | null>(cols).fill(null));
   const isWp = (x: number, y: number) => level!.waypoints.some((w) => w.x === x && w.y === y);
-  const blocked = (x: number, y: number) => grid[y][x] !== null;
-  const pathNow = () => fullPath(D.COLS, D.ROWS, blocked, level!.waypoints);
-  for (const o of level!.obstacles) if (!isWp(o.x, o.y)) grid[o.y][o.x] = { x: o.x, y: o.y, kind: 'sealed', cd: 0, auraMul: 1 };
+  const isVoid = (x: number, y: number) => voidSet.has(y * cols + x);
+  const blocked = (x: number, y: number) => isVoid(x, y) || grid[y][x] !== null;
+  const pathNow = () => fullPath(cols, rows, blocked, level!.waypoints);
+  for (const o of level!.obstacles)
+    if (!isWp(o.x, o.y) && !isVoid(o.x, o.y)) grid[o.y][o.x] = { x: o.x, y: o.y, kind: 'sealed', cd: 0, auraMul: 1 };
 
   let lives = D.START_LIVES;
   let gold = 0;
@@ -92,15 +99,15 @@ function playRun(strategy: Strategy): RunResult {
 
   /** Cells next to the current path, ordered by how many path cells are in range 2.5. */
   const candidateCells = (): Pt[] => {
-    const onPath = new Set(path.map((p) => p.y * D.COLS + p.x));
+    const onPath = new Set(path.map((p) => p.y * cols + p.x));
     const out: { p: Pt; score: number }[] = [];
-    for (let y = 0; y < D.ROWS; y++)
-      for (let x = 0; x < D.COLS; x++) {
-        if (grid[y][x] || isWp(x, y)) continue;
+    for (let y = 0; y < rows; y++)
+      for (let x = 0; x < cols; x++) {
+        if (grid[y][x] || isWp(x, y) || isVoid(x, y)) continue;
         let score = 0;
         for (const p of path) if (Math.hypot(p.x - x, p.y - y) <= 2.5) score++;
         // standing on the path lengthens the maze — bots like that a bit
-        if (onPath.has(y * D.COLS + x)) score += 3;
+        if (onPath.has(y * cols + x)) score += 3;
         out.push({ p: { x, y }, score: score + rng() * 2 });
       }
     return out.sort((a, b) => b.score - a.score).map((o) => o.p);
@@ -157,7 +164,7 @@ function playRun(strategy: Strategy): RunResult {
     }
 
     // --- wave ---
-    const battle = new Battle(path, level!.waypoints, level!.hpMul, rng);
+    const battle = new Battle(path, level!.waypoints, level!.hpMul, rng, gridX, gridY);
     battle.startWave(D.WAVES[wave - 1]);
     let lost = 0;
     let guard = 0;
